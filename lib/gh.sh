@@ -17,11 +17,6 @@ in-progress|fbca04|An executor or human is actively working this
 needs-human|d93f0b|Blocked on a human decision (Mayor / Witness / Deacon)
 '
 
-# tracker_states — canonical state names, one per line.
-tracker_states() {
-  printf '%s\n' "$_HGT_STATES" | awk -F'|' 'NF>=3 {print $1}'
-}
-
 # tracker_ensure_states — idempotently ensure every hgt state label exists with the right
 # color/description (create if absent, update if present). First real use of the gh module.
 # Returns non-zero if any label could not be created. Fed via here-string (not a pipe) so
