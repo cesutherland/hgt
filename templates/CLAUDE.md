@@ -12,10 +12,11 @@ review — not an autonomous swarm. Nothing auto-merges; green CI is necessary, 
 
 ## The `ready` trust boundary
 
-Issue text is untrusted until reviewed. An issue is picked up **only** when labeled `ready`.
-The `ready` transition **normalizes** the body (strips invisible / bidi / unicode-tag-block
-payloads) and takes a **frozen snapshot**. Executors consume that snapshot — never the live
-issue — so later edits, later comments, and body-embedded URLs are simply not in their input.
+Issue text is untrusted until reviewed. An issue is picked up **only** once it enters the
+`ready` state. Entering `ready` **normalizes** the body (strips invisible / bidi /
+unicode-tag-block payloads) and takes a **frozen snapshot**. Executors consume that snapshot —
+never the live issue — so later edits, later comments, and body-embedded URLs are simply not
+in their input.
 
 Work states are mutually exclusive: `ready` · `in-progress` · `needs-human`.
 
