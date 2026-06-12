@@ -25,10 +25,14 @@ cmd_init() {
     stamp_file "$dest" <"$HGT_ROOT/$src"
     if [ "$STAMP_RESULT" = created ]; then
       n_created=$((n_created + 1))
-      [ -n "$mode" ] && chmod "$mode" "$dest"
     else
       n_skipped=$((n_skipped + 1))
     fi
+    # Enforce mode every run, not just on create: a pre-existing hook with the wrong
+    # perms (external checkout, a partial earlier run, a user's hand-rolled file) must
+    # end up executable, or it dies at the `ready` trust boundary. Perms aren't content,
+    # so this doesn't violate never-clobber — we repair the bit, not the bytes.
+    [ -n "$mode" ] && chmod "$mode" "$dest"
   done
 
   info ""

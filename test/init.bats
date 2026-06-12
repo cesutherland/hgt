@@ -51,3 +51,13 @@ load helper
   [ "$status" -eq 0 ]
   [ "$(cat "$TMP/CLAUDE.md")" = "LOCAL EDIT" ]
 }
+
+@test "init repairs the normalize hook's exec bit on an existing non-executable file" {
+  "$HGT_BIN" init >/dev/null 2>&1
+  chmod -x "$TMP/.hgt/hooks/normalize"
+  [ ! -x "$TMP/.hgt/hooks/normalize" ]   # precondition: bit is gone
+
+  run "$HGT_BIN" init                     # re-run skips the file but must restore the bit
+  [ "$status" -eq 0 ]
+  [ -x "$TMP/.hgt/hooks/normalize" ]
+}
