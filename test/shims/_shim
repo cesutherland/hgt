@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# hgt test shim — a fake external binary that records its invocation and returns a canned
+# result, so the conformance suite stays hermetic (no network, no real repo mutation) while
+# still asserting that hgt makes the right calls at the process boundary.
+#
+# Invoked via a name-symlink (gh, git, tmux, claude). Records "<name> <args...>" to
+# $SHIM_LOG. Optional per-command overrides (NAME upper-cased, '-' -> '_'):
+#   SHIM_<NAME>_OUT    stdout to emit   (default: none)
+#   SHIM_<NAME>_EXIT   exit code        (default: 0)
+set -euo pipefail
+name=$(basename "$0")
+upper=$(printf '%s' "$name" | tr '[:lower:]-' '[:upper:]_')
+printf '%s %s\n' "$name" "$*" >>"${SHIM_LOG:?SHIM_LOG not set}"
+out_var="SHIM_${upper}_OUT"
+exit_var="SHIM_${upper}_EXIT"
+[ -n "${!out_var:-}" ] && printf '%s\n' "${!out_var}"
+exit "${!exit_var:-0}"
