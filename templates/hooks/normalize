@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# hgt normalization hook — SURFACE ONLY (Slice 1 stub).
+#
+# At the `ready` transition hgt will pipe the raw issue body through this hook to strip
+# invisible / bidi / unicode-tag-block payloads before any human or agent reads it, then
+# snapshot the result. This is the trust boundary (spec §2/§3).
+#
+# Slice 1 ships the surface, not the implementation: identity passthrough below.
+# TODO(ready-slice): replace with a vetted unicode normalizer. Per decision D6 this is the
+# language re-evaluation checkpoint — security-sensitive; do not hand-roll in bash glue.
+set -euo pipefail
+cat

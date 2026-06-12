@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# hgt — issue-driven development harness (Phase 0 / Slice 1: skeleton + init).
+set -euo pipefail
+
+# Resolve this script's real directory (following symlinks) so lib/ and cmds/ load
+# regardless of CWD or whether hgt was symlinked onto PATH.
+_self="${BASH_SOURCE[0]}"
+while [ -L "$_self" ]; do
+  _dir=$(cd -P "$(dirname "$_self")" >/dev/null 2>&1 && pwd)
+  _self=$(readlink "$_self")
+  case "$_self" in /*) ;; *) _self="$_dir/$_self" ;; esac
+done
+HGT_ROOT=$(cd -P "$(dirname "$_self")" >/dev/null 2>&1 && pwd)
+export HGT_ROOT
+
+# shellcheck source=lib/common.sh
+source "$HGT_ROOT/lib/common.sh"
+# shellcheck source=lib/gh.sh
+source "$HGT_ROOT/lib/gh.sh"
+
+HGT_VERSION="0.0.1-slice1"
+
+usage() {
+  cat <<'EOF'
+hgt — issue-driven development harness
+
+usage: hgt <command> [args]
+
+commands:
+  init     scaffold hgt into the current repo (idempotent)
+  issue    manage the issue queue           (not implemented in Slice 1)
+  work     local worktree + Claude session  (not implemented in Slice 1)
+
+options:
+  -h, --help     show this help
+  -V, --version  show version
+EOF
+}
+
+main() {
+  local cmd="${1:-}"
+  case "$cmd" in
+    ''|-h|--help|help) usage; exit 0 ;;
+    -V|--version)      echo "hgt $HGT_VERSION"; exit 0 ;;
+  esac
+  shift
+  case "$cmd" in
+    init)  source "$HGT_ROOT/cmds/init.sh";  cmd_init  "$@" ;;
+    issue) source "$HGT_ROOT/cmds/issue.sh"; cmd_issue "$@" ;;
+    work)  source "$HGT_ROOT/cmds/work.sh";  cmd_work  "$@" ;;
+    *)     die "unknown command: $cmd (try 'hgt --help')" ;;
+  esac
+}
+
+main "$@"

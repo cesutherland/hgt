@@ -1,0 +1,4 @@
+# .worktreeinclude — files a worktree should carry that git ignores by default.
+# One pattern per line. Tune for this repo.
+.env
+.env.*
