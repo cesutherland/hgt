@@ -37,7 +37,14 @@ cmd_init() {
 
   info ""
   info "labels (tracker states):"
-  tracker_ensure_states
+  # Non-fatal: gh auth/network can fail here, but the branch-protection ruleset below is
+  # pure text with no gh dependency and is the security-critical output — it must never be
+  # held hostage to label creation. Warn and carry on; an idempotent re-run fixes labels.
+  local labels_ok=1
+  if ! tracker_ensure_states; then
+    labels_ok=0
+    warn "could not create one or more state labels (gh auth/network?) — re-run 'hgt init' once fixed"
+  fi
 
   info ""
   info "branch protection for the default branch (forge) — review, then run:"
@@ -46,4 +53,5 @@ cmd_init() {
   info ""
   info "done: $n_created created, $n_skipped skipped."
   info "next: run the printed ruleset script to protect the default branch."
+  [ "$labels_ok" -eq 1 ] || die "labels were not created — see the warning above"
 }

@@ -24,12 +24,16 @@ tracker_states() {
 
 # tracker_ensure_states — idempotently ensure every hgt state label exists with the right
 # color/description (create if absent, update if present). First real use of the gh module.
+# Returns non-zero if any label could not be created. Fed via here-string (not a pipe) so
+# the loop runs in this shell: rc survives, and `return $rc` reports a real status instead
+# of the trailing-blank-line `continue` (always 0) that a pipe-subshell would hand back.
 tracker_ensure_states() {
-  local name color desc
-  printf '%s\n' "$_HGT_STATES" | while IFS='|' read -r name color desc; do
+  local name color desc rc=0
+  while IFS='|' read -r name color desc; do
     [ -n "$name" ] || continue
-    run gh label create "$name" --color "$color" --description "$desc" --force
-  done
+    run gh label create "$name" --color "$color" --description "$desc" --force || rc=1
+  done <<<"$_HGT_STATES"
+  return "$rc"
 }
 
 # forge_print_ruleset — print (do NOT apply) the §3 branch-protection script for `main`.

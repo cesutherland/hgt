@@ -52,6 +52,14 @@ load helper
   [ "$(cat "$TMP/CLAUDE.md")" = "LOCAL EDIT" ]
 }
 
+@test "init still prints the branch-protection ruleset even when label creation fails" {
+  SHIM_GH_EXIT=1 run "$HGT_BIN" init     # every `gh label create` fails
+
+  [ "$status" -ne 0 ]                                          # failure is still signalled
+  [[ "$output" == *"could not create one or more state labels"* ]]  # warned, not silent
+  [[ "$output" == *"require_last_push_approval"* ]]            # ...and the §3 ruleset printed anyway
+}
+
 @test "init repairs the normalize hook's exec bit on an existing non-executable file" {
   "$HGT_BIN" init >/dev/null 2>&1
   chmod -x "$TMP/.hgt/hooks/normalize"
