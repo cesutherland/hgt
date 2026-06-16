@@ -77,6 +77,8 @@ If this session dies: re-read this file, check \`git status\`, then resume the n
 \`hgt-issue-$n\` (\`claude --resume\`). git is the durable work state — not the agent's memory.
 EOF
   if [ "$STAMP_RESULT" = created ]; then
+    # Committed-plan-file mode (ADR 0002 D2). If .hgt/ is gitignored this add no-ops and the
+    # commit fails — making tracked vs. gitignored a real choice is tracked in #10.
     run git -C "$wt" add ".hgt/work/${n}.md"
     run git -C "$wt" commit -m "chore(hgt): seed work state for issue #$n"
   fi
