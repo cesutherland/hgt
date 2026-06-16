@@ -28,8 +28,8 @@ usage: hgt <command> [args]
 
 commands:
   init     scaffold hgt into the current repo (idempotent)
-  issue    manage the issue queue           (not implemented in Slice 1)
-  work     local worktree + Claude session  (not implemented in Slice 1)
+  issue    manage the issue queue           (not implemented yet)
+  work     local worktree + Claude session for issue <n>
 
 options:
   -h, --help     show this help
