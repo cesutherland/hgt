@@ -31,6 +31,18 @@ tracker_ensure_states() {
   return "$rc"
 }
 
+# tracker_issue_view N — resolve a single issue to a stable, parseable record (Slice 2;
+# Slice 3's `issue show` builds on this). One `gh` call, and the adapter (not core) owns the
+# JSON: gh's `--jq` serializes the four fields we need into single-line `key=` lines, then a
+# `---body---` sentinel, then the raw body LAST so a multi-line body survives intact. Core
+# reads neutral fields and never touches JSON or speaks "issue number" (D4). Pre-`ready` this
+# reads the LIVE body on purpose: locally you author and trust your own issues, so there is no
+# normalize+snapshot boundary here — that exists only to de-fang the untrusted Actions path.
+tracker_issue_view() {
+  run gh issue view "$1" --json number,title,body,url \
+    --jq '"number=" + (.number|tostring), "url=" + .url, "title=" + .title, "---body---", .body'
+}
+
 # forge_print_ruleset — print (do NOT apply) the §3 branch-protection script for `main`.
 # Slice 1 prints; applying from the CLI is a later slice. The human reviews then runs it.
 forge_print_ruleset() {

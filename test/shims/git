@@ -1,1 +1,29 @@
-_shim
+#!/usr/bin/env bash
+# hgt test shim — git. A dedicated shim (not the generic _shim symlink) because hgt's `work`
+# path needs git to have done *just enough* for hgt's own filesystem writes to land: after
+# `git worktree add ... <path>`, hgt writes the plan file and copies .worktreeinclude files
+# INTO <path>, so the path must exist. So this shim fakes exactly one thing — it `mkdir -p`s
+# the worktree path on `worktree add` — and nothing else. It is NOT real git: it won't catch
+# git-semantic failures (bad --base, path collisions, busted slugs); those aren't hgt's
+# contract (which git commands it issues + its own writes), and dogfooding surfaces them.
+#
+# Records "git <args...>" to $SHIM_LOG and honors the same overrides as _shim:
+#   SHIM_GIT_OUT   stdout to emit   (default: none)
+#   SHIM_GIT_EXIT  exit code        (default: 0)
+set -euo pipefail
+printf 'git %s\n' "$*" >>"${SHIM_LOG:?SHIM_LOG not set}"
+
+# `worktree add [<opts>] <path> [<commit-ish>]` — create the path so hgt's writes have a home.
+if [ "${1:-}" = worktree ] && [ "${2:-}" = add ]; then
+  shift 2
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -b | -B) shift 2; continue ;;  # branch flag takes a value
+      -*) shift; continue ;;          # any other option
+      *) mkdir -p "$1"; break ;;      # first positional is the worktree path
+    esac
+  done
+fi
+
+[ -n "${SHIM_GIT_OUT:-}" ] && printf '%s\n' "$SHIM_GIT_OUT"
+exit "${SHIM_GIT_EXIT:-0}"
