@@ -18,6 +18,15 @@ run() {
   "$@"
 }
 
+# slugify STRING — derive a branch-safe slug: lowercase, every run of non-alphanumerics
+# collapsed to a single '-', leading/trailing '-' trimmed. Matches the existing branch
+# convention (title "Claude md" -> "claude-md" in issue-1-claude-md). Prints to stdout.
+slugify() {
+  printf '%s' "$1" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'
+}
+
 # confirm PROMPT — y/N prompt; 0 on yes. Non-interactive stdin => no (safe default).
 confirm() {
   local reply

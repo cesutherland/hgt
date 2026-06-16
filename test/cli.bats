@@ -30,8 +30,8 @@ load helper
   [[ "$output" == *"not implemented in Slice 1"* ]]
 }
 
-@test "work is a non-zero Slice-1 placeholder" {
+@test "work with no issue number errors non-zero" {
   run "$HGT_BIN" work
   [ "$status" -ne 0 ]
-  [[ "$output" == *"not implemented in Slice 1"* ]]
+  [[ "$output" == *"missing issue number"* ]]
 }
