@@ -116,7 +116,9 @@ cmd_work_rm() {
   if [ "$force" -ne 1 ]; then
     local dirty unpushed
     dirty=$(git -C "$wtpath" status --porcelain) || true
-    unpushed=$(git -C "$wtpath" log --branches --not --remotes --oneline) || true
+    # HEAD, not --branches: worktrees share one .git, so --branches would also count unpushed
+    # commits on unrelated branches and refuse to remove a fully-pushed issue-<n> worktree.
+    unpushed=$(git -C "$wtpath" log HEAD --not --remotes --oneline) || true
     if [ -n "$dirty" ] || [ -n "$unpushed" ]; then
       die "hgt work rm: issue $n has uncommitted or unpushed work — rerun with --force to discard"
     fi
