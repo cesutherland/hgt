@@ -114,11 +114,15 @@ cmd_work_rm() {
   # commits not on any remote (unpushed) would be lost with the worktree — make the human opt
   # in via --force. The PR may be open, so we leave the branch regardless.
   if [ "$force" -ne 1 ]; then
+    # Fail closed: no `|| true`. If git errors here (corrupt worktree, bad path) let set -e
+    # abort, rather than read an empty result as "clean" and delete the worktree. Note: porcelain
+    # also lists carried .worktreeinclude files when they aren't gitignored, so those read as
+    # dirty — expected, since such files are typically .env-class.
     local dirty unpushed
-    dirty=$(git -C "$wtpath" status --porcelain) || true
+    dirty=$(git -C "$wtpath" status --porcelain)
     # HEAD, not --branches: worktrees share one .git, so --branches would also count unpushed
     # commits on unrelated branches and refuse to remove a fully-pushed issue-<n> worktree.
-    unpushed=$(git -C "$wtpath" log HEAD --not --remotes --oneline) || true
+    unpushed=$(git -C "$wtpath" log HEAD --not --remotes --oneline)
     if [ -n "$dirty" ] || [ -n "$unpushed" ]; then
       die "hgt work rm: issue $n has uncommitted or unpushed work — rerun with --force to discard"
     fi
