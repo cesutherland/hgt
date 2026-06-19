@@ -8,8 +8,8 @@ The name carries some lore:
 
 - **hgt** is **Human Gas Town** — which is about how we've all been feeling.
 - **hgt** is also **Mercury Town** — which is most definitely toxic.
-- **hgt** is in anticipation of whatever better thing is happening right now — a nod
-  to mercurial vs. git.
+- **hgt** is in anticipation of whatever other thing is happening right now, that wins
+  later — a nod to mercurial vs. git.
 
 ## What it is
 
@@ -17,10 +17,17 @@ You are the **Mayor** (what's worth doing, and in what order), the **Witness** (
 correct), and the **Deacon** (is it safe to land). Agents are Polecats. The harness keeps
 a human in exactly those three seats and nowhere else.
 
-This is **not** an autonomous swarm. It's a paved road with a human at both ends —
-scoping and review — and automation in the middle. Inspiration is Steve Yegge's Gastown,
-minus the chaos: keep the persistent-work-state and self-propelling-work ideas, drop the
-20–30-agent burn, the auto-merge, and the rampaging supervisor.
+This is **not** an autonomous swarm. The human holds three seats — scope, review, merge —
+and the machine drives everything between. That buys two specific things, both borrowed
+from Steve Yegge's Gastown:
+
+- **Self-propelling work:** once an issue is scoped and labeled, it moves itself to a
+  reviewable PR without you driving each step — you queue work, you don't babysit it.
+- **Persistent work state:** the durable state lives in git (issue + committed plan file),
+  not in an agent's memory, so a crash or `--resume` doesn't lose the thread.
+
+We keep those two ideas and drop the rest of Gastown's chaos: the 20–30-agent burn, the
+auto-merge, and the rampaging supervisor.
 
 ## How it works
 
@@ -80,8 +87,9 @@ against a context with no secrets and no `main` access is a non-event.
 Agent coordination state is ephemeral and dies on crash; **git is durable**. So the issue
 plus a committed plan file in the worktree *is* the durable work state. Crash recovery is
 re-read the plan file, check `git status`, and `claude --resume` (named sessions:
-`claude -n hgt-issue-<n>` so resume is deterministic). Commit early and often so every
-commit is a recovery checkpoint.
+`claude -n hgt-issue-<n>` so resume is deterministic). The tmux session isn't durable, so
+recovery relaunches the named session — reattach if it's still alive, else recreate.
+Commit early and often so every commit is a recovery checkpoint.
 
 ## CLI surface
 
@@ -104,8 +112,7 @@ hgt work <n>             # local execution: worktree + Claude session for issue 
 
 **Phase 0 — manual bootstrap.** `hgt` does not exist yet; vanilla Claude Code is building
 the CLI skeleton + `hgt init` + `hgt issue` basics by hand until the CLI is self-hosting
-("the compiler written in assembly" stage). Later phases dogfood the local loop (Phase 1),
-wire up the async Actions path with full guardrails (Phase 2), then expand and harden
-(Phase 3).
+("the compiler written in assembly" stage). Later phases: dogfood the local loop (1), wire
+the async Actions path with full guardrails (2), harden (3).
 
 The full design lives in [docs/SPEC.md](docs/SPEC.md).
