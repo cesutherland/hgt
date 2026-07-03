@@ -87,12 +87,15 @@ EOF
 
 # _tmux_attach NAME — join session NAME without nesting. Inside tmux ($TMUX set) you can't
 # attach (tmux refuses), so switch the current client instead; otherwise attach fresh.
+# Attaching is best-effort: the detached session is the durable artifact, so a headless/non-tty
+# caller (where attach fails "open terminal failed") must not abort hgt under set -e when the
+# session is alive and reattachable — warn how to reach it and move on.
 _tmux_attach() {
   local name="$1"
   if [ -n "${TMUX:-}" ]; then
-    run tmux switch-client -t "$name"
+    run tmux switch-client -t "$name" || warn "couldn't switch to tmux session $name (attach manually: tmux attach -t $name)"
   else
-    run tmux attach-session -t "$name"
+    run tmux attach-session -t "$name" || warn "couldn't attach tmux session $name (attach manually: tmux attach -t $name)"
   fi
 }
 
