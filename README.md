@@ -87,9 +87,10 @@ against a context with no secrets and no `main` access is a non-event.
 Agent coordination state is ephemeral and dies on crash; **git is durable**. So the issue
 plus a committed plan file in the worktree *is* the durable work state. Crash recovery is
 re-read the plan file, check `git status`, and `claude --resume` (named sessions:
-`claude -n hgt-issue-<n>` so resume is deterministic). The tmux session isn't durable, so
-recovery relaunches the named session — reattach if it's still alive, else recreate.
-Commit early and often so every commit is a recovery checkpoint.
+`claude -n hgt-issue-<n>` so resume is deterministic). By default the named session runs
+inside a **detached** tmux session (`hgt-issue-<n>`) that outlives the terminal, so recovery
+is "reattach if it's still alive, else recreate." Commit early and often so every commit is a
+recovery checkpoint.
 
 ## CLI surface
 
@@ -105,8 +106,9 @@ hgt work <n>             # local execution: worktree + Claude session for issue 
 - **`hgt issue ready <n>`** is the security-critical verb: unicode-normalize the body,
   write a frozen snapshot, apply the `ready` label. This is the trust boundary — treat it
   as security-sensitive code.
-- **`hgt work <n>`** creates a git worktree and a named Claude session, wires in the
-  frozen snapshot, and handles teardown / `--resume`.
+- **`hgt work <n>`** creates a git worktree and a named Claude session (in a detached tmux
+  session by default; `--no-tmux` launches inline), wires in the frozen snapshot, and
+  handles teardown / `--resume`.
 
 ## Status
 
