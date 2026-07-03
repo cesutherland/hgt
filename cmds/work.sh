@@ -158,17 +158,19 @@ cmd_work_rm() {
     fi
   fi
 
-  if [ "$force" -eq 1 ]; then
-    run git worktree remove --force "$wtpath"
-  else
-    run git worktree remove "$wtpath"
-  fi
-
-  # Tear down the tmux session too, if the launcher left one alive (Slice 2b). Guard on
+  # Kill the tmux session before the worktree it's rooted in disappears (Slice 2b): ordering
+  # kill-session ahead of `git worktree remove` keeps a live detached claude from ending up
+  # with a deleted cwd, and stops a failing remove from stranding the session. Guard on
   # has-session so an inline (--no-tmux) or already-dead run doesn't error.
   local name="hgt-issue-${n}"
   if tmux has-session -t "$name" 2>/dev/null; then
     run tmux kill-session -t "$name"
+  fi
+
+  if [ "$force" -eq 1 ]; then
+    run git worktree remove --force "$wtpath"
+  else
+    run git worktree remove "$wtpath"
   fi
 
   info "removed worktree for issue $n (branch left intact)"
