@@ -84,6 +84,16 @@ Wire it up.'
   ! grep -q '^tmux switch-client' "$SHIM_LOG"
 }
 
+@test "fresh launch splits into two panes: claude left, shell right (cwd worktree), focus on claude" {
+  work_env  # has-session absent -> fresh create
+  run "$HGT_BIN" work 5
+  [ "$status" -eq 0 ]
+  # shell pane added to the right, rooted in the worktree, sized 40% (60/40 claude-favored)
+  grep -q "^tmux split-window -h -t hgt-issue-5 -l 40% -c $TMP/wt/issue-5\$" "$SHIM_LOG"
+  # focus returns to the left (claude) pane, not the freshly-split shell
+  grep -q '^tmux select-pane -t hgt-issue-5 -L$' "$SHIM_LOG"
+}
+
 @test "work switches the client instead of attaching when already inside tmux" {
   work_env
   TMUX=/tmp/fake,1,0 run "$HGT_BIN" work 5
@@ -98,6 +108,8 @@ Wire it up.'
   [ "$status" -eq 0 ]
   [[ "$output" == *"resume: tmux session hgt-issue-5 is live"* ]]
   ! grep -q '^tmux new-session' "$SHIM_LOG"
+  # resume reattaches untouched — no re-split onto the already-2-pane layout (#24)
+  ! grep -q '^tmux split-window' "$SHIM_LOG"
   grep -q '^tmux attach-session -t hgt-issue-5$' "$SHIM_LOG"
 }
 
