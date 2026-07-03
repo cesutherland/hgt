@@ -123,11 +123,20 @@ launch_session() {
   fi
 
   if tmux has-session -t "$name" 2>/dev/null; then
+    # Resume reattaches the live session *untouched* — no re-split. Re-running split-window here
+    # would stack a third pane onto an already-2-pane layout on every resume (#24); the durable
+    # session already carries whatever layout the last launch established.
     info "resume: tmux session $name is live"
   else
+    # Fresh launch: two panes — claude left, a shell right, cwd = the worktree (#24). new-session
+    # -d starts the window running claude; split-window -h adds the shell beside it (no command =
+    # your default shell); select-pane -L returns focus to claude so you land on the agent, not
+    # the shell.
     # claude + args become the session's shell command (tmux runs it via `sh -c`). The prompt
     # is a fixed internal string with no single quotes, so single-quoting it is safe here.
     run tmux new-session -d -s "$name" -c "$wt" "claude -n '$name' '$prompt'"
+    run tmux split-window -h -t "$name" -c "$wt"
+    run tmux select-pane -t "$name" -L
   fi
   _tmux_attach "$name"
 }
