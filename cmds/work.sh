@@ -32,6 +32,13 @@ _worktree_path() {
   printf '%s/issue-%s' "$base" "$n"
 }
 
+# _session_name N — the deterministic session id for issue N (`hgt-issue-N`). This one id is the
+# join key across tmux create/attach/resume, tmux kill, and `claude --resume`, so it lives in a
+# single place; change the convention here and launch + teardown move in lockstep. Prints to stdout.
+_session_name() {
+  printf 'hgt-issue-%s' "$1"
+}
+
 # _carry_worktree_includes WT — copy the files named in ./.worktreeinclude (e.g. .env) into
 # the new worktree. `git worktree add` doesn't carry git-ignored files, so this is what makes
 # that scaffolded file mean something. Patterns are globbed against the repo's working tree.
@@ -75,7 +82,7 @@ $body
 ## Recovery
 
 If this session dies: re-read this file, check \`git status\`, then resume the named session
-\`hgt-issue-$n\` (\`claude --resume\`). git is the durable work state — not the agent's memory.
+\`$(_session_name "$n")\` (\`claude --resume\`). git is the durable work state — not the agent's memory.
 EOF
   if [ "$STAMP_RESULT" = created ]; then
     # Committed-plan-file mode (ADR 0002 D2). If .hgt/ is gitignored this add no-ops and the
@@ -107,7 +114,7 @@ _tmux_attach() {
 # session name matches the claude session name so `claude --resume` stays deterministic too.
 launch_session() {
   local n="$1" wt="$2" use_tmux="${3:-1}"
-  local name="hgt-issue-${n}"
+  local name; name=$(_session_name "$n")
   local prompt="Read .hgt/work/${n}.md and CLAUDE.md, then start on issue #${n}. Commit early and often — every commit is a recovery checkpoint. Open a PR for review; do not merge."
 
   if [ "$use_tmux" -eq 0 ]; then
@@ -165,7 +172,7 @@ cmd_work_rm() {
   # kill-session ahead of `git worktree remove` keeps a live detached claude from ending up
   # with a deleted cwd, and stops a failing remove from stranding the session. Guard on
   # has-session so an inline (--no-tmux) or already-dead run doesn't error.
-  local name="hgt-issue-${n}"
+  local name; name=$(_session_name "$n")
   if tmux has-session -t "$name" 2>/dev/null; then
     run tmux kill-session -t "$name"
   fi
