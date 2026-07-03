@@ -6,7 +6,10 @@ load helper
 
 # work_env — every work test points the worktree dir inside $TMP (so nothing leaks past
 # teardown) and feeds the gh shim the canned record tracker_issue_view would emit for issue 5.
+# Also clears $TMUX so the launcher's attach-vs-switch choice is deterministic regardless of
+# whether the suite itself runs inside tmux; tests that exercise the switch path set it back.
 work_env() {
+  unset TMUX
   export HGT_WORKTREE_DIR="$TMP/wt"
   export SHIM_GH_OUT='number=5
 url=https://github.com/cesutherland/hgt/issues/5
@@ -62,27 +65,68 @@ Wire it up.'
   grep -q "^git worktree add -b issue-5-add-a-widget $TMP/wt/issue-5 feature-x\$" "$SHIM_LOG"
 }
 
-@test "work --no-session ensures the worktree without launching claude" {
+@test "work --no-session ensures the worktree without launching claude or tmux" {
   work_env
   run "$HGT_BIN" work 5 --no-session
   [ "$status" -eq 0 ]
   ! grep -q '^claude ' "$SHIM_LOG"
+  ! grep -q '^tmux '   "$SHIM_LOG"
 }
 
-@test "work launches the deterministically-named claude session in the worktree" {
-  work_env
+@test "work launches the named claude session in a detached tmux session, then attaches" {
+  work_env  # $TMUX cleared, and has-session defaults to absent -> fresh create
   run "$HGT_BIN" work 5
   [ "$status" -eq 0 ]
-  grep -q '^claude -n hgt-issue-5 ' "$SHIM_LOG"
+  # created detached, named + rooted in the worktree, running the named claude session
+  grep -q "^tmux new-session -d -s hgt-issue-5 -c $TMP/wt/issue-5 claude -n 'hgt-issue-5' " "$SHIM_LOG"
+  # outside tmux -> attach, not switch-client
+  grep -q '^tmux attach-session -t hgt-issue-5$' "$SHIM_LOG"
+  ! grep -q '^tmux switch-client' "$SHIM_LOG"
 }
 
-@test "work rm tears down a clean worktree" {
+@test "work switches the client instead of attaching when already inside tmux" {
+  work_env
+  TMUX=/tmp/fake,1,0 run "$HGT_BIN" work 5
+  [ "$status" -eq 0 ]
+  grep -q '^tmux switch-client -t hgt-issue-5$' "$SHIM_LOG"
+  ! grep -q '^tmux attach-session' "$SHIM_LOG"
+}
+
+@test "work resumes a live tmux session instead of spawning a second" {
+  work_env
+  run env SHIM_TMUX_HAS_SESSION=0 "$HGT_BIN" work 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"resume: tmux session hgt-issue-5 is live"* ]]
+  ! grep -q '^tmux new-session' "$SHIM_LOG"
+  grep -q '^tmux attach-session -t hgt-issue-5$' "$SHIM_LOG"
+}
+
+@test "work --no-tmux launches claude inline, no tmux session" {
+  work_env
+  run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  grep -q '^claude -n hgt-issue-5 ' "$SHIM_LOG"
+  ! grep -q '^tmux ' "$SHIM_LOG"
+}
+
+@test "work rm tears down a clean worktree, and kills its tmux session when one is live" {
   work_env
   "$HGT_BIN" work 5 --no-session >/dev/null 2>&1
   : >"$SHIM_LOG"
-  run "$HGT_BIN" work rm 5
+  run env SHIM_TMUX_HAS_SESSION=0 "$HGT_BIN" work rm 5
   [ "$status" -eq 0 ]
   grep -q "^git worktree remove $TMP/wt/issue-5\$" "$SHIM_LOG"
+  grep -q '^tmux kill-session -t hgt-issue-5$'      "$SHIM_LOG"
+}
+
+@test "work rm leaves tmux alone when no session is live" {
+  work_env
+  "$HGT_BIN" work 5 --no-session >/dev/null 2>&1
+  : >"$SHIM_LOG"
+  run "$HGT_BIN" work rm 5  # has-session defaults to absent
+  [ "$status" -eq 0 ]
+  grep -q "^git worktree remove $TMP/wt/issue-5\$" "$SHIM_LOG"
+  ! grep -q '^tmux kill-session' "$SHIM_LOG"
 }
 
 @test "work rm refuses uncommitted/unpushed work without --force" {

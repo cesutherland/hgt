@@ -6,13 +6,14 @@
 
 _work_usage() {
   cat <<'EOF'
-usage: hgt work <n> [--base <ref>] [--no-session]
+usage: hgt work <n> [--base <ref>] [--no-session] [--no-tmux]
        hgt work rm <n> [--force]
 
 Open (or resume) a local worktree + named Claude session for issue <n>.
 
   --base <ref>    base the new worktree here (default: HEAD — supports stacking)
   --no-session    ensure the worktree, don't launch claude
+  --no-tmux       launch claude inline instead of in a detached tmux session
   rm <n>          tear the worktree down (refuses dirty/unpushed work without --force)
 EOF
 }
@@ -29,6 +30,13 @@ _worktree_path() {
     base="$(dirname "$root")/$(basename "$root")-worktrees"
   fi
   printf '%s/issue-%s' "$base" "$n"
+}
+
+# _session_name N — the deterministic session id for issue N (`hgt-issue-N`). This one id is the
+# join key across tmux create/attach/resume, tmux kill, and `claude --resume`, so it lives in a
+# single place; change the convention here and launch + teardown move in lockstep. Prints to stdout.
+_session_name() {
+  printf 'hgt-issue-%s' "$1"
 }
 
 # _carry_worktree_includes WT — copy the files named in ./.worktreeinclude (e.g. .env) into
@@ -74,7 +82,7 @@ $body
 ## Recovery
 
 If this session dies: re-read this file, check \`git status\`, then resume the named session
-\`hgt-issue-$n\` (\`claude --resume\`). git is the durable work state — not the agent's memory.
+\`$(_session_name "$n")\` (\`claude --resume\`). git is the durable work state — not the agent's memory.
 EOF
   if [ "$STAMP_RESULT" = created ]; then
     # Committed-plan-file mode (ADR 0002 D2). If .hgt/ is gitignored this add no-ops and the
@@ -84,14 +92,44 @@ EOF
   fi
 }
 
-# launch_session N WT — the launcher seam. Slice 2 launches claude inline in the worktree;
-# Slice 2b adds a tmux path behind this same seam (selected by a future --no-tmux). The name
-# is deterministic (`hgt-issue-N`) so `claude --resume` is deterministic too (§4).
+# _tmux_attach NAME — join session NAME without nesting. Inside tmux ($TMUX set) you can't
+# attach (tmux refuses), so switch the current client instead; otherwise attach fresh.
+# Attaching is best-effort: the detached session is the durable artifact, so a headless/non-tty
+# caller (where attach fails "open terminal failed") must not abort hgt under set -e when the
+# session is alive and reattachable — warn how to reach it and move on.
+_tmux_attach() {
+  local name="$1"
+  if [ -n "${TMUX:-}" ]; then
+    run tmux switch-client -t "$name" || warn "couldn't switch to tmux session $name (attach manually: tmux attach -t $name)"
+  else
+    run tmux attach-session -t "$name" || warn "couldn't attach tmux session $name (attach manually: tmux attach -t $name)"
+  fi
+}
+
+# launch_session N WT [TMUX] — the launcher seam (spec §4/§5). Default (TMUX=1): run the named
+# claude session inside a *detached* tmux session `hgt-issue-N`, then attach/switch to it. The
+# detached session outlives your terminal, so crash-recovery becomes "reattach if it's alive,
+# else recreate" instead of "relaunch from scratch" (see ADR 0003). Resume reuses a live session
+# rather than spawning a second. TMUX=0 (--no-tmux) keeps the Slice 2 inline launch. The tmux
+# session name matches the claude session name so `claude --resume` stays deterministic too.
 launch_session() {
-  local n="$1" wt="$2"
-  local name="hgt-issue-${n}"
+  local n="$1" wt="$2" use_tmux="${3:-1}"
+  local name; name=$(_session_name "$n")
   local prompt="Read .hgt/work/${n}.md and CLAUDE.md, then start on issue #${n}. Commit early and often — every commit is a recovery checkpoint. Open a PR for review; do not merge."
-  (cd "$wt" && run claude -n "$name" "$prompt")
+
+  if [ "$use_tmux" -eq 0 ]; then
+    (cd "$wt" && run claude -n "$name" "$prompt")
+    return
+  fi
+
+  if tmux has-session -t "$name" 2>/dev/null; then
+    info "resume: tmux session $name is live"
+  else
+    # claude + args become the session's shell command (tmux runs it via `sh -c`). The prompt
+    # is a fixed internal string with no single quotes, so single-quoting it is safe here.
+    run tmux new-session -d -s "$name" -c "$wt" "claude -n '$name' '$prompt'"
+  fi
+  _tmux_attach "$name"
 }
 
 cmd_work_rm() {
@@ -130,11 +168,21 @@ cmd_work_rm() {
     fi
   fi
 
+  # Kill the tmux session before the worktree it's rooted in disappears (Slice 2b): ordering
+  # kill-session ahead of `git worktree remove` keeps a live detached claude from ending up
+  # with a deleted cwd, and stops a failing remove from stranding the session. Guard on
+  # has-session so an inline (--no-tmux) or already-dead run doesn't error.
+  local name; name=$(_session_name "$n")
+  if tmux has-session -t "$name" 2>/dev/null; then
+    run tmux kill-session -t "$name"
+  fi
+
   if [ "$force" -eq 1 ]; then
     run git worktree remove --force "$wtpath"
   else
     run git worktree remove "$wtpath"
   fi
+
   info "removed worktree for issue $n (branch left intact)"
 }
 
@@ -145,12 +193,13 @@ cmd_work() {
     '') die "hgt work: missing issue number (try 'hgt work <n>')" ;;
   esac
 
-  local n="" base="HEAD" session=1
+  local n="" base="HEAD" session=1 use_tmux=1
   while [ $# -gt 0 ]; do
     case "$1" in
       --base) shift; base="${1:?hgt work: --base needs a ref}" ;;
       --base=*) base="${1#--base=}" ;;
       --no-session) session=0 ;;
+      --no-tmux) use_tmux=0 ;;
       -h | --help) _work_usage; return 0 ;;
       -*) die "hgt work: unknown flag $1" ;;
       *) [ -z "$n" ] && n="$1" || die "hgt work: unexpected argument $1" ;;
@@ -192,7 +241,7 @@ cmd_work() {
   fi
 
   if [ "$session" -eq 1 ]; then
-    launch_session "$n" "$wtpath"
+    launch_session "$n" "$wtpath" "$use_tmux"
   else
     info "session: skipped (--no-session); worktree ready at $wtpath"
   fi
