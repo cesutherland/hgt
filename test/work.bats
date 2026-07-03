@@ -88,8 +88,8 @@ Wire it up.'
   work_env  # has-session absent -> fresh create
   run "$HGT_BIN" work 5
   [ "$status" -eq 0 ]
-  # shell pane added to the right, rooted in the worktree, split 50/50
-  grep -q "^tmux split-window -h -t hgt-issue-5 -l 50% -c $TMP/wt/issue-5\$" "$SHIM_LOG"
+  # shell pane added to the right, rooted in the worktree
+  grep -q "^tmux split-window -h -t hgt-issue-5 -c $TMP/wt/issue-5\$" "$SHIM_LOG"
   # focus returns to the left (claude) pane, not the freshly-split shell
   grep -q '^tmux select-pane -t hgt-issue-5 -L$' "$SHIM_LOG"
 }
