@@ -130,12 +130,12 @@ launch_session() {
   else
     # Fresh launch: two panes — claude left, a shell right, cwd = the worktree (#24). new-session
     # -d starts the window running claude; split-window -h adds the shell beside it (no command =
-    # your default shell), sized so claude keeps the larger pane (-l 40% -> 60/40, claude-favored);
-    # select-pane -L returns focus to claude so you land on the agent, not the shell.
+    # your default shell), split 50/50 (-l 50%); select-pane -L returns focus to claude so you land
+    # on the agent, not the shell.
     # claude + args become the session's shell command (tmux runs it via `sh -c`). The prompt
     # is a fixed internal string with no single quotes, so single-quoting it is safe here.
     run tmux new-session -d -s "$name" -c "$wt" "claude -n '$name' '$prompt'"
-    run tmux split-window -h -t "$name" -l 40% -c "$wt"
+    run tmux split-window -h -t "$name" -l 50% -c "$wt"
     run tmux select-pane -t "$name" -L
   fi
   _tmux_attach "$name"
