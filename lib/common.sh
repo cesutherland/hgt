@@ -27,6 +27,34 @@ slugify() {
     | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'
 }
 
+# A leading conventional-commit type is redundant with the issue/PR context, and stopwords
+# are noise in a name — both get dropped from short slugs (issue #36). Space-padded so a
+# whole-word `case` match (`*" $tok "*`) can't fire on a substring.
+_SLUG_CC_TYPES=' feat fix chore docs refactor test build ci perf style revert wip '
+_SLUG_STOPWORDS=' a an the to of for and or in on at is be with '
+_slug_in_list() { case "$1" in *" $2 "*) return 0 ;; *) return 1 ;; esac; }
+
+# slug_short STRING — a short, human-readable slug for branch/worktree/session names
+# (issue #36). Full slugify, then: drop a leading conventional-commit type word, drop
+# stopwords, and cap at 5 words. Deterministic and re-derivable from the same title, so it
+# stays a stable naming key (no LLM, no drift). May print empty (title was all noise); callers
+# fall back to a literal. Prints to stdout.
+slug_short() {
+  local tok out="" n=0 first=1 IFS=-
+  for tok in $(slugify "$1"); do
+    [ -n "$tok" ] || continue
+    if [ "$first" -eq 1 ]; then
+      first=0
+      _slug_in_list "$_SLUG_CC_TYPES" "$tok" && continue
+    fi
+    _slug_in_list "$_SLUG_STOPWORDS" "$tok" && continue
+    out="${out:+$out-}$tok"
+    n=$((n + 1))
+    [ "$n" -ge 5 ] && break
+  done
+  printf '%s' "$out"
+}
+
 # confirm PROMPT — y/N prompt; 0 on yes. Non-interactive stdin => no (safe default).
 confirm() {
   local reply
