@@ -5,12 +5,17 @@ load helper
 # plan file + carried files). git is a shimmed boundary — we do NOT re-test git's behavior.
 
 # work_env — every work test points the worktree dir inside $TMP (so nothing leaks past
-# teardown) and feeds the gh shim the canned record tracker_issue_view would emit for issue 5.
-# Also clears $TMUX so the launcher's attach-vs-switch choice is deterministic regardless of
-# whether the suite itself runs inside tmux; tests that exercise the switch path set it back.
+# teardown), pins the repo label (the git-toplevel default isn't exercised hermetically, like
+# the worktree base — ADR 0002/D3), and feeds the gh shim the canned record tracker_issue_view
+# would emit for issue 5. Also clears $TMUX so the launcher's attach-vs-switch choice is
+# deterministic regardless of whether the suite itself runs inside tmux; tests that exercise the
+# switch path set it back. The branch author defaults to the gh shim's SHIM_GH_USER (testuser),
+# and "Add a Widget" short-slugs to "add-widget" (the stopword "a" is dropped) — so issue 5 is
+# worktree 5-add-widget, branch testuser/5-add-widget, session hgt/5-add-widget throughout.
 work_env() {
   unset TMUX
   export HGT_WORKTREE_DIR="$TMP/wt"
+  export HGT_REPO_NAME=hgt
   export SHIM_GH_OUT='number=5
 url=https://github.com/cesutherland/hgt/issues/5
 title=Add a Widget
@@ -19,7 +24,7 @@ Build the widget.
 Wire it up.'
 }
 
-@test "work creates a worktree on issue-<n>-<slug> off HEAD, carries includes, seeds + commits the plan file" {
+@test "work creates a worktree on <n>-<slug> under <user>/<n>-<slug>, carries includes, seeds + commits the plan file" {
   work_env
   printf 'secret\n' >.env
   printf '.env\n' >.worktreeinclude
@@ -27,23 +32,26 @@ Wire it up.'
   run "$HGT_BIN" work 5 --no-session
   [ "$status" -eq 0 ]
 
-  # resolved through the tracker seam (one gh call)
+  # resolved through the tracker seam, and the branch author through the forge seam
   grep -q '^gh issue view 5 --json number,title,body,url' "$SHIM_LOG"
-  # derived branch + our path + default HEAD base, at the git boundary
-  grep -q "^git worktree add -b issue-5-add-a-widget $TMP/wt/issue-5 HEAD\$" "$SHIM_LOG"
+  grep -q '^gh api user --jq .login'                       "$SHIM_LOG"
+  # short slug + user-namespaced branch + our path + default HEAD base, at the git boundary
+  grep -q "^git worktree add -b testuser/5-add-widget $TMP/wt/5-add-widget HEAD\$" "$SHIM_LOG"
 
-  # plan file written with the issue's fields + verbatim body
-  [ -f "$TMP/wt/issue-5/.hgt/work/5.md" ]
-  grep -q 'Issue 5 — Add a Widget'                              "$TMP/wt/issue-5/.hgt/work/5.md"
-  grep -q 'https://github.com/cesutherland/hgt/issues/5'        "$TMP/wt/issue-5/.hgt/work/5.md"
-  grep -q 'Build the widget.'                                   "$TMP/wt/issue-5/.hgt/work/5.md"
+  # plan file written with the issue's fields, the real branch, and the verbatim body
+  [ -f "$TMP/wt/5-add-widget/.hgt/work/5.md" ]
+  grep -q 'Issue 5 — Add a Widget'                              "$TMP/wt/5-add-widget/.hgt/work/5.md"
+  grep -q '\*\*Branch:\*\* testuser/5-add-widget'               "$TMP/wt/5-add-widget/.hgt/work/5.md"
+  grep -q 'hgt/5-add-widget'                                    "$TMP/wt/5-add-widget/.hgt/work/5.md"
+  grep -q 'https://github.com/cesutherland/hgt/issues/5'        "$TMP/wt/5-add-widget/.hgt/work/5.md"
+  grep -q 'Build the widget.'                                   "$TMP/wt/5-add-widget/.hgt/work/5.md"
 
   # committed as the first recovery checkpoint
-  grep -q "^git -C $TMP/wt/issue-5 add .hgt/work/5.md\$"  "$SHIM_LOG"
-  grep -q "^git -C $TMP/wt/issue-5 commit -m "            "$SHIM_LOG"
+  grep -q "^git -C $TMP/wt/5-add-widget add .hgt/work/5.md\$"  "$SHIM_LOG"
+  grep -q "^git -C $TMP/wt/5-add-widget commit -m "           "$SHIM_LOG"
 
   # .worktreeinclude file carried into the worktree (git worktree add wouldn't)
-  [ -f "$TMP/wt/issue-5/.env" ]
+  [ -f "$TMP/wt/5-add-widget/.env" ]
 }
 
 @test "re-running work resumes the existing worktree: no second add, no re-commit" {
@@ -56,13 +64,23 @@ Wire it up.'
   [[ "$output" == *"resume: worktree exists"* ]]
   ! grep -q 'worktree add' "$SHIM_LOG"
   ! grep -q 'commit -m'    "$SHIM_LOG"
+  # resume never needs the branch author again (no re-derivation, no title lookup)
+  ! grep -q '^gh api user' "$SHIM_LOG"
 }
 
 @test "work --base bases the worktree elsewhere (stacking)" {
   work_env
   run "$HGT_BIN" work 5 --base feature-x --no-session
   [ "$status" -eq 0 ]
-  grep -q "^git worktree add -b issue-5-add-a-widget $TMP/wt/issue-5 feature-x\$" "$SHIM_LOG"
+  grep -q "^git worktree add -b testuser/5-add-widget $TMP/wt/5-add-widget feature-x\$" "$SHIM_LOG"
+}
+
+@test "work falls back to an unprefixed branch when the gh login lookup fails" {
+  work_env
+  run env SHIM_GH_USER_EXIT=1 "$HGT_BIN" work 5 --no-session
+  [ "$status" -eq 0 ]
+  # no <user>/ prefix, just <n>-<slug> — a failed login lookup must not block local work
+  grep -q "^git worktree add -b 5-add-widget $TMP/wt/5-add-widget HEAD\$" "$SHIM_LOG"
 }
 
 @test "work --no-session ensures the worktree without launching claude or tmux" {
@@ -77,10 +95,10 @@ Wire it up.'
   work_env  # $TMUX cleared, and has-session defaults to absent -> fresh create
   run "$HGT_BIN" work 5
   [ "$status" -eq 0 ]
-  # created detached, named + rooted in the worktree, running the named claude session
-  grep -q "^tmux new-session -d -s hgt-issue-5 -c $TMP/wt/issue-5 claude -n 'hgt-issue-5' " "$SHIM_LOG"
+  # created detached, named <repo>/<n>-<slug> + rooted in the worktree, running the named claude session
+  grep -q "^tmux new-session -d -s hgt/5-add-widget -c $TMP/wt/5-add-widget claude -n 'hgt/5-add-widget' " "$SHIM_LOG"
   # outside tmux -> attach, not switch-client
-  grep -q '^tmux attach-session -t hgt-issue-5$' "$SHIM_LOG"
+  grep -q '^tmux attach-session -t hgt/5-add-widget$' "$SHIM_LOG"
   ! grep -q '^tmux switch-client' "$SHIM_LOG"
 }
 
@@ -89,16 +107,16 @@ Wire it up.'
   run "$HGT_BIN" work 5
   [ "$status" -eq 0 ]
   # shell pane added to the right, rooted in the worktree
-  grep -q "^tmux split-window -h -t hgt-issue-5 -c $TMP/wt/issue-5\$" "$SHIM_LOG"
+  grep -q "^tmux split-window -h -t hgt/5-add-widget -c $TMP/wt/5-add-widget\$" "$SHIM_LOG"
   # focus returns to the left (claude) pane, not the freshly-split shell
-  grep -q '^tmux select-pane -t hgt-issue-5 -L$' "$SHIM_LOG"
+  grep -q '^tmux select-pane -t hgt/5-add-widget -L$' "$SHIM_LOG"
 }
 
 @test "work switches the client instead of attaching when already inside tmux" {
   work_env
   TMUX=/tmp/fake,1,0 run "$HGT_BIN" work 5
   [ "$status" -eq 0 ]
-  grep -q '^tmux switch-client -t hgt-issue-5$' "$SHIM_LOG"
+  grep -q '^tmux switch-client -t hgt/5-add-widget$' "$SHIM_LOG"
   ! grep -q '^tmux attach-session' "$SHIM_LOG"
 }
 
@@ -106,18 +124,18 @@ Wire it up.'
   work_env
   run env SHIM_TMUX_HAS_SESSION=0 "$HGT_BIN" work 5
   [ "$status" -eq 0 ]
-  [[ "$output" == *"resume: tmux session hgt-issue-5 is live"* ]]
+  [[ "$output" == *"resume: tmux session hgt/5-add-widget is live"* ]]
   ! grep -q '^tmux new-session' "$SHIM_LOG"
   # resume reattaches untouched — no re-split onto the already-2-pane layout (#24)
   ! grep -q '^tmux split-window' "$SHIM_LOG"
-  grep -q '^tmux attach-session -t hgt-issue-5$' "$SHIM_LOG"
+  grep -q '^tmux attach-session -t hgt/5-add-widget$' "$SHIM_LOG"
 }
 
 @test "work --no-tmux launches claude inline, no tmux session" {
   work_env
   run "$HGT_BIN" work 5 --no-tmux
   [ "$status" -eq 0 ]
-  grep -q '^claude -n hgt-issue-5 ' "$SHIM_LOG"
+  grep -q '^claude -n hgt/5-add-widget ' "$SHIM_LOG"
   ! grep -q '^tmux ' "$SHIM_LOG"
 }
 
@@ -127,8 +145,9 @@ Wire it up.'
   : >"$SHIM_LOG"
   run env SHIM_TMUX_HAS_SESSION=0 "$HGT_BIN" work rm 5
   [ "$status" -eq 0 ]
-  grep -q "^git worktree remove $TMP/wt/issue-5\$" "$SHIM_LOG"
-  grep -q '^tmux kill-session -t hgt-issue-5$'      "$SHIM_LOG"
+  grep -q "^git worktree remove $TMP/wt/5-add-widget\$" "$SHIM_LOG"
+  # session name rebuilt from N alone (repo label + slug recovered off the worktree dir)
+  grep -q '^tmux kill-session -t hgt/5-add-widget$'     "$SHIM_LOG"
 }
 
 @test "work rm leaves tmux alone when no session is live" {
@@ -137,7 +156,7 @@ Wire it up.'
   : >"$SHIM_LOG"
   run "$HGT_BIN" work rm 5  # has-session defaults to absent
   [ "$status" -eq 0 ]
-  grep -q "^git worktree remove $TMP/wt/issue-5\$" "$SHIM_LOG"
+  grep -q "^git worktree remove $TMP/wt/5-add-widget\$" "$SHIM_LOG"
   ! grep -q '^tmux kill-session' "$SHIM_LOG"
 }
 
@@ -157,7 +176,7 @@ Wire it up.'
   : >"$SHIM_LOG"
   SHIM_GIT_OUT=' M somefile' run "$HGT_BIN" work rm 5 --force
   [ "$status" -eq 0 ]
-  grep -q "^git worktree remove --force $TMP/wt/issue-5\$" "$SHIM_LOG"
+  grep -q "^git worktree remove --force $TMP/wt/5-add-widget\$" "$SHIM_LOG"
 }
 
 @test "work rm errors when there is no worktree for the issue" {

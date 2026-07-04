@@ -43,6 +43,15 @@ tracker_issue_view() {
     --jq '"number=" + (.number|tostring), "url=" + .url, "title=" + .title, "---body---", .body'
 }
 
+# forge_current_user — the authenticated GitHub login, used to namespace feature branches as
+# `<user>/<issue>-<slug>` (issue #36). A forge concern (who authors the branch on the code
+# host), not a tracker one, so it lives on the forge_ axis. One `gh` call; prints to stdout.
+# Callers treat failure as non-fatal and fall back to an unprefixed branch — a missing login
+# shouldn't block local work when `gh issue view` already succeeded.
+forge_current_user() {
+  run gh api user --jq .login
+}
+
 # forge_print_ruleset — print (do NOT apply) the §3 branch-protection script for `main`.
 # Slice 1 prints; applying from the CLI is a later slice. The human reviews then runs it.
 forge_print_ruleset() {
