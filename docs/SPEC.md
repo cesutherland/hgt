@@ -127,7 +127,8 @@ Agent coordination state is ephemeral and dies on crash; **git is durable**. So:
 
 - The **issue + a committed plan file** in the worktree *is* the durable work state.
 - Crash recovery = re-read the plan file, check `git status`, `claude --resume` (use
-  **named** sessions: `claude -n hgt-issue-<n>` so resume is deterministic).
+  **named** sessions: `claude -n <repo>/<n>-<slug>` so resume is deterministic — `<n>` is the
+  stable join key, the slug a human-readable hint recovered from the worktree dir; see ADR 0004).
 - Do **not** depend on Agent Teams' in-process task/inbox state for anything you can't
   afford to lose — it's wiped on restart. For this POC, prefer a single named, resumable
   session per issue over a team.
