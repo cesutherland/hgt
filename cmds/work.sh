@@ -269,12 +269,13 @@ cmd_work() {
   done <<<"$record"
 
   local slug branch wtpath user
-  slug=$(slug_short "$title"); [ -n "$slug" ] || slug="issue"
-
   wtpath=$(_find_worktree "$n")
   if [ -n "$wtpath" ]; then
+    # Resume derives nothing from the title: the slug is recovered from the worktree dir
+    # (the durable, N-keyed artifact), so a retitle can't strand the session (#36).
     info "resume: worktree exists at $wtpath"
   else
+    slug=$(slug_short "$title"); [ -n "$slug" ] || slug="issue"
     wtpath=$(_worktree_path "$n" "$slug")
     # Namespace the branch under the GitHub login (`<user>/<n>-<slug>`, issue #36). The lookup
     # is non-fatal: `gh issue view` already succeeded above, so this rarely fails, but if it
