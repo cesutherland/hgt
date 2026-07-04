@@ -62,12 +62,13 @@ _repo_slug() {
   slugify "$name"
 }
 
-# _session_name REPO N SLUG — the human-readable session id `<repo>/<n>-<slug>` (issue #36).
-# It's the join key across tmux create/attach/resume, tmux kill, and `claude --resume`. The
-# stable part is `<n>`; the slug is a cosmetic suffix, re-derivable from the worktree dir, so
-# teardown/resume rebuild this name from N alone without a title lookup. Prints to stdout.
+# _session_name N WT — the human-readable session id `<repo>/<n>-<slug>` (issue #36), derived
+# wholly from N and the worktree dir. It's the join key across tmux create/attach/resume, tmux
+# kill, and `claude --resume`. The slug is a cosmetic suffix recovered from the worktree dir (the
+# durable, N-keyed artifact), so create and teardown reconstruct the *same* name from N alone —
+# no title lookup, and no create-vs-kill drift by construction. Prints to stdout.
 _session_name() {
-  printf '%s/%s-%s' "$1" "$2" "$3"
+  printf '%s/%s-%s' "$(_repo_slug)" "$1" "$(_slug_of "$1" "$2")"
 }
 
 # _carry_worktree_includes WT — copy the files named in ./.worktreeinclude (e.g. .env) into
@@ -92,7 +93,7 @@ _carry_worktree_includes() {
 # the feature branch. stamp_file never clobbers, so a resume keeps any edits the agent committed.
 _seed_work_state() {
   local n="$1" title="$2" url="$3" body="$4" wt="$5" branch="$6"
-  local name; name=$(_session_name "$(_repo_slug)" "$n" "$(_slug_of "$n" "$wt")")
+  local name; name=$(_session_name "$n" "$wt")
   stamp_file "$wt/.hgt/work/${n}.md" <<EOF
 # Issue $n — $title
 
@@ -146,7 +147,7 @@ _tmux_attach() {
 # session name matches the claude session name so `claude --resume` stays deterministic too.
 launch_session() {
   local n="$1" wt="$2" use_tmux="${3:-1}"
-  local name; name=$(_session_name "$(_repo_slug)" "$n" "$(_slug_of "$n" "$wt")")
+  local name; name=$(_session_name "$n" "$wt")
   local prompt="Read .hgt/work/${n}.md and CLAUDE.md, then start on issue #${n}. Commit early and often — every commit is a recovery checkpoint. Open a PR for review; do not merge."
 
   if [ "$use_tmux" -eq 0 ]; then
@@ -213,7 +214,7 @@ cmd_work_rm() {
   # kill-session ahead of `git worktree remove` keeps a live detached claude from ending up
   # with a deleted cwd, and stops a failing remove from stranding the session. Guard on
   # has-session so an inline (--no-tmux) or already-dead run doesn't error.
-  local name; name=$(_session_name "$(_repo_slug)" "$n" "$(_slug_of "$n" "$wtpath")")
+  local name; name=$(_session_name "$n" "$wtpath")
   if tmux has-session -t "$name" 2>/dev/null; then
     run tmux kill-session -t "$name"
   fi
