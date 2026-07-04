@@ -87,10 +87,11 @@ against a context with no secrets and no `main` access is a non-event.
 Agent coordination state is ephemeral and dies on crash; **git is durable**. So the issue
 plus a committed plan file in the worktree *is* the durable work state. Crash recovery is
 re-read the plan file, check `git status`, and `claude --resume` (named sessions:
-`claude -n hgt-issue-<n>` so resume is deterministic). By default the named session runs
-inside a **detached** tmux session (`hgt-issue-<n>`) that outlives the terminal, so recovery
-is "reattach if it's still alive, else recreate." Commit early and often so every commit is a
-recovery checkpoint.
+`claude -n <repo>/<n>-<slug>` so resume is deterministic). By default the named session runs
+inside a **detached** tmux session (`<repo>/<n>-<slug>`) that outlives the terminal, so recovery
+is "reattach if it's still alive, else recreate." The `<n>` is the stable join key; the slug is
+a human-readable hint recovered from the worktree dir, so teardown needs no title lookup. Commit
+early and often so every commit is a recovery checkpoint.
 
 ## CLI surface
 

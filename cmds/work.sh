@@ -18,25 +18,57 @@ Open (or resume) a local worktree + named Claude session for issue <n>.
 EOF
 }
 
-# _worktree_path N — the sibling worktree path for issue N. Override the parent dir with
-# HGT_WORKTREE_DIR (the tests point this inside their tmpdir). Default is a sibling of the
-# repo, `../<repo>-worktrees/issue-N`, so it lives outside the repo (no .gitignore entry).
-_worktree_path() {
-  local n="$1" base root
+# _worktree_base — the parent dir that holds all issue worktrees. Override with HGT_WORKTREE_DIR
+# (the tests point this inside their tmpdir). Default is a sibling of the repo,
+# `../<repo>-worktrees`, so worktrees live outside the repo (no .gitignore entry).
+_worktree_base() {
   if [ -n "${HGT_WORKTREE_DIR:-}" ]; then
-    base="$HGT_WORKTREE_DIR"
+    printf '%s' "$HGT_WORKTREE_DIR"
   else
-    root=$(git rev-parse --show-toplevel)
-    base="$(dirname "$root")/$(basename "$root")-worktrees"
+    local root; root=$(git rev-parse --show-toplevel)
+    printf '%s/%s-worktrees' "$(dirname "$root")" "$(basename "$root")"
   fi
-  printf '%s/issue-%s' "$base" "$n"
 }
 
-# _session_name N — the deterministic session id for issue N (`hgt-issue-N`). This one id is the
-# join key across tmux create/attach/resume, tmux kill, and `claude --resume`, so it lives in a
-# single place; change the convention here and launch + teardown move in lockstep. Prints to stdout.
+# _worktree_path N SLUG — the worktree path for issue N, `<base>/<n>-<slug>` (issue #36). The
+# slug rides along for human readability; N is the stable key. Used at *create*, where the slug
+# is in hand. Prints to stdout.
+_worktree_path() { printf '%s/%s-%s' "$(_worktree_base)" "$1" "$2"; }
+
+# _find_worktree N — the existing worktree dir for issue N, found by globbing `<base>/<n>-*`,
+# empty if none. This is how resume + teardown recover the (drift-carrying) slug from N alone:
+# the worktree dir is the durable, N-keyed artifact, so no title lookup is needed and a retitled
+# issue still resolves to its original dir. Prints the first match to stdout.
+_find_worktree() {
+  local n="$1" base d
+  base=$(_worktree_base)
+  for d in "$base/$n"-*; do
+    [ -d "$d" ] && { printf '%s' "$d"; return 0; }
+  done
+  return 0  # no match: print nothing, succeed (an unmatched glob must not trip set -e)
+}
+
+# _slug_of N WT — recover the slug from a worktree dir path `<base>/<n>-<slug>` (strip the
+# `<n>-` prefix off the basename). The dir is the source of truth, so the slug survives a
+# retitle. Prints to stdout.
+_slug_of() { local base; base="${2##*/}"; printf '%s' "${base#"$1"-}"; }
+
+# _repo_slug — the repo label that namespaces sessions (`<repo>/...`). Slugified so it's safe in
+# a tmux session name (tmux forbids `.`/`:`, which a repo dir like `my.tool` could carry).
+# Overridable via HGT_REPO_NAME (the hermetic suite sets it; the git-toplevel default, like
+# _worktree_base's, isn't exercised there — see ADR 0002/D3). Prints to stdout.
+_repo_slug() {
+  local name; name="${HGT_REPO_NAME:-$(basename "$(git rev-parse --show-toplevel)")}"
+  slugify "$name"
+}
+
+# _session_name N WT — the human-readable session id `<repo>/<n>-<slug>` (issue #36), derived
+# wholly from N and the worktree dir. It's the join key across tmux create/attach/resume, tmux
+# kill, and `claude --resume`. The slug is a cosmetic suffix recovered from the worktree dir (the
+# durable, N-keyed artifact), so create and teardown reconstruct the *same* name from N alone —
+# no title lookup, and no create-vs-kill drift by construction. Prints to stdout.
 _session_name() {
-  printf 'hgt-issue-%s' "$1"
+  printf '%s/%s-%s' "$(_repo_slug)" "$1" "$(_slug_of "$1" "$2")"
 }
 
 # _carry_worktree_includes WT — copy the files named in ./.worktreeinclude (e.g. .env) into
@@ -56,17 +88,18 @@ _carry_worktree_includes() {
   done <.worktreeinclude
 }
 
-# _seed_work_state N TITLE URL BODY WT — write the durable plan file (§4) into the worktree
-# and, only when it's freshly created, commit it as the first recovery checkpoint on the
-# feature branch. stamp_file never clobbers, so a resume keeps any edits the agent committed.
+# _seed_work_state N TITLE URL BODY WT BRANCH — write the durable plan file (§4) into the
+# worktree and, only when it's freshly created, commit it as the first recovery checkpoint on
+# the feature branch. stamp_file never clobbers, so a resume keeps any edits the agent committed.
 _seed_work_state() {
-  local n="$1" title="$2" url="$3" body="$4" wt="$5"
+  local n="$1" title="$2" url="$3" body="$4" wt="$5" branch="$6"
+  local name; name=$(_session_name "$n" "$wt")
   stamp_file "$wt/.hgt/work/${n}.md" <<EOF
 # Issue $n — $title
 
 - **Issue:** #$n
 - **URL:** $url
-- **Branch:** issue-$n-$(slugify "$title")
+- **Branch:** $branch
 - **State:** in-progress (local)
 
 ## Task (verbatim from the issue body)
@@ -82,7 +115,7 @@ $body
 ## Recovery
 
 If this session dies: re-read this file, check \`git status\`, then resume the named session
-\`$(_session_name "$n")\` (\`claude --resume\`). git is the durable work state — not the agent's memory.
+\`$name\` (\`claude --resume\`). git is the durable work state — not the agent's memory.
 EOF
   if [ "$STAMP_RESULT" = created ]; then
     # Committed-plan-file mode (ADR 0002 D2). If .hgt/ is gitignored this add no-ops and the
@@ -107,14 +140,14 @@ _tmux_attach() {
 }
 
 # launch_session N WT [TMUX] — the launcher seam (spec §4/§5). Default (TMUX=1): run the named
-# claude session inside a *detached* tmux session `hgt-issue-N`, then attach/switch to it. The
+# claude session inside a *detached* tmux session `<repo>/<n>-<slug>`, then attach/switch to it. The
 # detached session outlives your terminal, so crash-recovery becomes "reattach if it's alive,
 # else recreate" instead of "relaunch from scratch" (see ADR 0003). Resume reuses a live session
 # rather than spawning a second. TMUX=0 (--no-tmux) keeps the Slice 2 inline launch. The tmux
 # session name matches the claude session name so `claude --resume` stays deterministic too.
 launch_session() {
   local n="$1" wt="$2" use_tmux="${3:-1}"
-  local name; name=$(_session_name "$n")
+  local name; name=$(_session_name "$n" "$wt")
   local prompt="Read .hgt/work/${n}.md and CLAUDE.md, then start on issue #${n}. Commit early and often — every commit is a recovery checkpoint. Open a PR for review; do not merge."
 
   if [ "$use_tmux" -eq 0 ]; then
@@ -156,8 +189,8 @@ cmd_work_rm() {
   case "$n" in *[!0-9]*) die "hgt work rm: issue must be a number, got '$n'" ;; esac
 
   local wtpath
-  wtpath=$(_worktree_path "$n")
-  [ -d "$wtpath" ] || die "hgt work rm: no worktree for issue $n at $wtpath"
+  wtpath=$(_find_worktree "$n")
+  [ -n "$wtpath" ] || die "hgt work rm: no worktree for issue $n under $(_worktree_base)"
 
   # Refuse to nuke work that isn't safely recorded elsewhere. A dirty tree (uncommitted) or
   # commits not on any remote (unpushed) would be lost with the worktree — make the human opt
@@ -181,7 +214,7 @@ cmd_work_rm() {
   # kill-session ahead of `git worktree remove` keeps a live detached claude from ending up
   # with a deleted cwd, and stops a failing remove from stranding the session. Guard on
   # has-session so an inline (--no-tmux) or already-dead run doesn't error.
-  local name; name=$(_session_name "$n")
+  local name; name=$(_session_name "$n" "$wtpath")
   if tmux has-session -t "$name" 2>/dev/null; then
     run tmux kill-session -t "$name"
   fi
@@ -235,18 +268,24 @@ cmd_work() {
     esac
   done <<<"$record"
 
-  local slug branch wtpath
-  slug=$(slugify "$title"); [ -n "$slug" ] || slug="issue"
-  branch="issue-${n}-${slug}"
-  wtpath=$(_worktree_path "$n")
-
-  if [ -d "$wtpath" ]; then
+  local slug branch wtpath user
+  wtpath=$(_find_worktree "$n")
+  if [ -n "$wtpath" ]; then
+    # Resume derives nothing from the title: the slug is recovered from the worktree dir
+    # (the durable, N-keyed artifact), so a retitle can't strand the session (#36).
     info "resume: worktree exists at $wtpath"
   else
+    slug=$(slug_short "$title"); [ -n "$slug" ] || slug="issue"
+    wtpath=$(_worktree_path "$n" "$slug")
+    # Namespace the branch under the GitHub login (`<user>/<n>-<slug>`, issue #36). The lookup
+    # is non-fatal: `gh issue view` already succeeded above, so this rarely fails, but if it
+    # does we fall back to an unprefixed `<n>-<slug>` rather than block local work.
+    user=$(forge_current_user) || user=""
+    if [ -n "$user" ]; then branch="${user}/${n}-${slug}"; else branch="${n}-${slug}"; fi
     info "create: worktree $wtpath on $branch (base $base)"
     run git worktree add -b "$branch" "$wtpath" "$base"
     _carry_worktree_includes "$wtpath"
-    _seed_work_state "$n" "$title" "$url" "$body" "$wtpath"
+    _seed_work_state "$n" "$title" "$url" "$body" "$wtpath" "$branch"
   fi
 
   if [ "$session" -eq 1 ]; then
