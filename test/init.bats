@@ -36,18 +36,6 @@ load helper
   ! grep -q 'rulesets' "$SHIM_LOG"
 }
 
-@test "init's printed ruleset shows how to require CI checks, without hardcoding hgt's own" {
-  run "$HGT_BIN" init
-  [ "$status" -eq 0 ]
-
-  # teaches the generic shape (required_status_checks) so each repo plugs in its own contexts
-  [[ "$output" == *"required_status_checks"* ]]
-  [[ "$output" == *"YOUR_CI_JOB_NAME"* ]]
-  # but stays decoupled: the generic template must NOT bake in hgt's own `conformance` context
-  # as an active JSON rule — that belongs only in hgt's applier script, referenced by name here.
-  [[ "$output" == *"require this repo's CI status checks"* ]]
-}
-
 @test "init is idempotent: re-running skips existing files" {
   "$HGT_BIN" init >/dev/null 2>&1
   run "$HGT_BIN" init

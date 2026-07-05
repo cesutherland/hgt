@@ -92,19 +92,6 @@ JSON
 gh api -X PUT repos/{owner}/{repo}/actions/permissions/workflow \
   -F default_workflow_permissions=read \
   -F can_approve_pull_request_reviews=false
-
-# 3) OPTIONAL — require this repo's CI status checks before merge (green is necessary,
-#    not sufficient; §3 keeps the human as the merge gate). Check *contexts* are your
-#    workflow's job names, so they're repo-specific and hgt can't fill them in for you.
-#    Recreate the ruleset above with an extra rule listing your contexts, e.g.:
-#      { "type": "required_status_checks",
-#        "parameters": {
-#          "strict_required_status_checks_policy": false,
-#          "required_status_checks": [ { "context": "YOUR_CI_JOB_NAME" } ]
-#        }
-#      }
-#    (hgt's own repo requires its `test` suite this way — see
-#     scripts/require-test-check.sh, which merges the check into this ruleset.)
 # -------------------------------------------------------------------------------
 EOF
 }

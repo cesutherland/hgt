@@ -121,21 +121,8 @@ CI (`.github/workflows/ci.yml`) runs that suite on every PR to `main` and report
 `test` status check. Per spec §3 the workflow is deliberately poor and powerless:
 `permissions: contents: read`, no secrets, pinned action SHAs, `pull_request` (never
 `pull_request_target`). A red suite is meant to **block** merge — green is necessary, not
-sufficient; a human still reviews and merges.
-
-Making `test` an actually-*required* check is a one-time, admin-only step on this repo
-(it mutates branch protection, so it's not run automatically):
-
-```
-# 1) apply the §3 base ruleset if it doesn't exist yet (review the printed script first):
-hgt init            # prints the branch-protection script — run it
-# 2) add the test suite as a required status check on that ruleset:
-scripts/require-test-check.sh
-```
-
-This is hgt-specific on purpose: check contexts are your workflow's job names, so
-`hgt init`'s generic ruleset never hardcodes `test` — it only shows the shape for you to
-plug in your own repo's CI checks.
+sufficient; a human still reviews and merges. Making `test` a *required* check is a
+one-time repo-admin step (add it to the `main` ruleset) once branch protection is applied.
 
 ## Status
 
