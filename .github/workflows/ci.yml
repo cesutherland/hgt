@@ -14,8 +14,10 @@
 # bad interaction between two independently-green PRs surfaces immediately.
 #
 # Gate: the job below reports a status check named `test`. Register that context as a
-# required status check in the default-branch ruleset (see forge_print_ruleset in lib/gh.sh)
-# so a red suite blocks merge. Human stays the merge gate; green is necessary, not sufficient.
+# required status check in the default-branch ruleset — a manual repo-admin step for now.
+# forge_print_ruleset in lib/gh.sh prints that ruleset but emits no required_status_checks
+# rule yet, so it would need one added to wire this in. So a red suite blocks merge; human
+# stays the merge gate; green is necessary, not sufficient.
 name: ci
 
 on:
