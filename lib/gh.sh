@@ -103,8 +103,8 @@ gh api -X PUT repos/{owner}/{repo}/actions/permissions/workflow \
 #          "required_status_checks": [ { "context": "YOUR_CI_JOB_NAME" } ]
 #        }
 #      }
-#    (hgt's own repo requires its `conformance` suite this way — see
-#     scripts/require-conformance-check.sh, which merges the check into this ruleset.)
+#    (hgt's own repo requires its `test` suite this way — see
+#     scripts/require-test-check.sh, which merges the check into this ruleset.)
 # -------------------------------------------------------------------------------
 EOF
 }

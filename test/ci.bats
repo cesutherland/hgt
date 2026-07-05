@@ -45,21 +45,21 @@ WF="$HGT_REPO/.github/workflows/ci.yml"
   grep -Eq 'run:[[:space:]]*\./test/run\.sh' "$WF"
 }
 
-@test "CI job is named 'conformance' — the exact context the §3 ruleset requires" {
-  # The required-status-check context (scripts/require-conformance-check.sh, context=conformance)
-  # must match the job's reported check name, or the gate never goes green. Pin them together.
-  grep -Eq '^[[:space:]]+name:[[:space:]]+conformance$' "$WF"
+@test "CI job is named 'test' — the exact context the §3 ruleset requires" {
+  # The required-status-check context (scripts/require-test-check.sh, context=test) must match
+  # the job's reported check name, or the gate never goes green. Pin them together.
+  grep -Eq '^[[:space:]]+name:[[:space:]]+test$' "$WF"
 }
 
-# --- scripts/require-conformance-check.sh --------------------------------------------------
+# --- scripts/require-test-check.sh ---------------------------------------------------------
 
-RCC="$HGT_REPO/scripts/require-conformance-check.sh"
+RCC="$HGT_REPO/scripts/require-test-check.sh"
 
-@test "require-conformance-check.sh exists and is executable" {
+@test "require-test-check.sh exists and is executable" {
   [ -x "$RCC" ]
 }
 
-@test "require-conformance-check.sh errors clearly when the §3 ruleset is absent" {
+@test "require-test-check.sh errors clearly when the §3 ruleset is absent" {
   # gh (shimmed) returns no rulesets -> the script must refuse, not silently PUT nothing.
   SHIM_GH_OUT='[]' run "$RCC" owner/repo
   [ "$status" -ne 0 ]

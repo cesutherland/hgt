@@ -13,7 +13,7 @@
 # to gain. The `push` trigger is a canary: it re-runs the suite against main after merge so a
 # bad interaction between two independently-green PRs surfaces immediately.
 #
-# Gate: the job below reports a status check named `conformance`. Register that context as a
+# Gate: the job below reports a status check named `test`. Register that context as a
 # required status check in the default-branch ruleset (see forge_print_ruleset in lib/gh.sh)
 # so a red suite blocks merge. Human stays the merge gate; green is necessary, not sufficient.
 name: ci
@@ -32,8 +32,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  conformance:
-    name: conformance
+  test:
+    name: test
     runs-on: ubuntu-latest
     steps:
       # Pinned to a commit SHA (§3: pin actions; don't drift). Comments name the tag.

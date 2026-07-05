@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# require-conformance-check.sh — make hgt's own `conformance` CI check (see
-# .github/workflows/ci.yml) a REQUIRED status check on the default branch, so a red
-# suite blocks merge (issue #21). Human-run, idempotent, needs `gh` with admin on the repo.
+# require-test-check.sh — make hgt's own `test` CI check (see .github/workflows/ci.yml)
+# a REQUIRED status check on the default branch, so a red suite blocks merge (issue #21).
+# Human-run, idempotent, needs `gh` with admin on the repo.
 #
 # Why this is hgt-specific and NOT baked into `forge_print_ruleset` (lib/gh.sh): status-check
 # contexts are per-repo — they're your workflow's job names. Any repo you run `hgt init` on has
-# its own CI with its own check names, so the generic §3 ruleset must not hardcode `conformance`
+# its own CI with its own check names, so the generic §3 ruleset must not hardcode `test`
 # (that would demand a check no other repo has, and wedge its PRs un-mergeable). The generic
 # template teaches the *shape*; this script wires hgt's *concrete* gate onto hgt's own ruleset.
 #
@@ -13,12 +13,12 @@
 # `hgt init` prints — forge_print_ruleset — first). This script only ADDS the required check
 # to that ruleset; it deliberately touches nothing else in §3.
 #
-# Usage: scripts/require-conformance-check.sh [owner/repo]   (defaults to the current repo)
+# Usage: scripts/require-test-check.sh [owner/repo]   (defaults to the current repo)
 set -euo pipefail
 
 repo="${1:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
 name="hgt: protect default branch"   # must match forge_print_ruleset's ruleset name
-context="conformance"                # must match the job name in .github/workflows/ci.yml
+context="test"                       # must match the job name in .github/workflows/ci.yml
 
 id="$(gh api "repos/$repo/rulesets" \
   | jq -r --arg n "$name" 'map(select(.name == $n)) | .[0].id // empty')"
@@ -29,7 +29,7 @@ if [ -z "$id" ]; then
 fi
 
 # GET the full ruleset, MERGE our required-status-checks context in (preserving any the repo
-# already requires), then PUT it back. Idempotent: re-running is a no-op once `conformance` is
+# already requires), then PUT it back. Idempotent: re-running is a no-op once `test` is
 # present. We reduce the GET to the writable fields the PUT accepts, so round-tripping doesn't
 # choke on read-only metadata (id, node_id, _links, timestamps, …).
 payload="$(gh api "repos/$repo/rulesets/$id" | jq --arg ctx "$context" '
