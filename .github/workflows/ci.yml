@@ -1,0 +1,58 @@
+# CI — run the hgt bats conformance suite on PRs and gate merge on it (issue #21).
+#
+# This is the test-gate workflow, NOT the Phase 2 executor. Per spec §3 it stays poor and
+# powerless: `permissions: contents: read`, no secrets, no ANTHROPIC_API_KEY / GITHUB_TOKEN
+# write, no network dependency at test time (the suite is hermetic — PATH-shims for
+# gh/git/tmux/claude live in test/shims/). Because it holds nothing worth stealing and can
+# touch nothing, a malicious workflow edit shipped on a PR branch escalates to... a read-only,
+# secretless runner. That is the whole point of §3's "treat workflow files on PR branches as
+# an escalation vector": we neutralize the vector by giving it nothing to escalate to.
+#
+# On `pull_request` (deliberately NOT `pull_request_target`) the job runs the PR branch's own
+# copy of this file, so a fork PR can't gain the base repo's context — and there is no context
+# to gain. The `push` trigger is a canary: it re-runs the suite against main after merge so a
+# bad interaction between two independently-green PRs surfaces immediately.
+#
+# Gate: the job below reports a status check named `test`. Register that context as a
+# required status check in the default-branch ruleset — a manual repo-admin step for now.
+# forge_print_ruleset in lib/gh.sh prints that ruleset but emits no required_status_checks
+# rule yet, so it would need one added to wire this in. So a red suite blocks merge; human
+# stays the merge gate; green is necessary, not sufficient.
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to a commit SHA (§3: pin actions; don't drift). Comments name the tag.
+      - name: Check out the PR branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # bats-core/bats-action installs bats + four helper libs by default; the suite uses
+      # only core bats, so the libs are turned off to keep the runner lean and the install
+      # surface small. bats-version is pinned to match local dev (test/run.sh), no drift.
+      - name: Install bats
+        uses: bats-core/bats-action@77d6fb60505b4d0d1d73e48bd035b55074bbfb43 # 4.0.0
+        with:
+          bats-version: "1.13.0"
+          support-install: false
+          assert-install: false
+          detik-install: false
+          file-install: false
+
+      - name: Run the conformance suite
+        run: ./test/run.sh

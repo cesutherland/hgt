@@ -111,6 +111,19 @@ hgt work <n>             # local execution: worktree + Claude session for issue 
   session by default; `--no-tmux` launches inline), wires in the frozen snapshot, and
   handles teardown / `--resume`.
 
+## Tests & CI
+
+The conformance suite is [bats](https://github.com/bats-core/bats-core); run it with
+`./test/run.sh`. It's hermetic — external commands (`gh`/`git`/`tmux`/`claude`) are
+PATH-shimmed in `test/shims/`, so there's no network, no secrets, and no real repo mutation.
+
+CI (`.github/workflows/ci.yml`) runs that suite on every PR to `main` and reports a
+`test` status check. Per spec §3 the workflow is deliberately poor and powerless:
+`permissions: contents: read`, no secrets, pinned action SHAs, `pull_request` (never
+`pull_request_target`). A red suite is meant to **block** merge — green is necessary, not
+sufficient; a human still reviews and merges. Making `test` a *required* check is a
+one-time repo-admin step (add it to the `main` ruleset) once branch protection is applied.
+
 ## Status
 
 **Phase 0 — manual bootstrap.** `hgt` does not exist yet; vanilla Claude Code is building
