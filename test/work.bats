@@ -95,8 +95,11 @@ Wire it up.'
   work_env  # $TMUX cleared, and has-session defaults to absent -> fresh create
   run "$HGT_BIN" work 5
   [ "$status" -eq 0 ]
-  # created detached, named <repo>/<n>-<slug> + rooted in the worktree, running the named claude session
-  grep -q "^tmux new-session -d -s hgt/5-add-widget -c $TMP/wt/5-add-widget claude -n 'hgt/5-add-widget' " "$SHIM_LOG"
+  # session created detached as a plain shell, named <repo>/<n>-<slug> + rooted in the worktree
+  grep -q "^tmux new-session -d -s hgt/5-add-widget -c $TMP/wt/5-add-widget\$" "$SHIM_LOG"
+  # claude launched *into* that shell via send-keys (#47) — not as the pane's PID 1, so a
+  # claude exit/failure leaves the session alive with a live shell, not an evaporated session
+  grep -q "^tmux send-keys -t hgt/5-add-widget claude -n 'hgt/5-add-widget' .* Enter\$" "$SHIM_LOG"
   # outside tmux -> attach, not switch-client
   grep -q '^tmux attach-session -t hgt/5-add-widget$' "$SHIM_LOG"
   ! grep -q '^tmux switch-client' "$SHIM_LOG"
@@ -110,6 +113,15 @@ Wire it up.'
   grep -q "^tmux split-window -h -t hgt/5-add-widget -c $TMP/wt/5-add-widget\$" "$SHIM_LOG"
   # focus returns to the left (claude) pane, not the freshly-split shell
   grep -q '^tmux select-pane -t hgt/5-add-widget -L$' "$SHIM_LOG"
+}
+
+@test "fresh launch sequences the tmux calls new-session -> send-keys -> split-window -> select-pane (#47)" {
+  work_env  # has-session absent -> fresh create
+  run "$HGT_BIN" work 5
+  [ "$status" -eq 0 ]
+  # claude must be sent into a live shell (send-keys) only after the session exists, and the
+  # split/focus must follow — so a claude startup failure can never strand a half-built layout
+  grep '^tmux ' "$SHIM_LOG" | grep -Eo 'new-session|send-keys|split-window|select-pane' | head -4 | tr '\n' ' ' | grep -q '^new-session send-keys split-window select-pane $'
 }
 
 @test "work switches the client instead of attaching when already inside tmux" {
