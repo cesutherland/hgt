@@ -25,5 +25,14 @@ if [ "${1:-}" = worktree ] && [ "${2:-}" = add ]; then
   done
 fi
 
+# `show-ref --verify --quiet refs/heads/<branch>` — hgt's branch-existence probe that decides
+# create (-b) vs. resume (re-attach) when the worktree is absent (issue #23). Answer from
+# SHIM_GIT_BRANCH_EXISTS (default absent -> 1 = missing, so today's create path is the default),
+# independent of the global SHIM_GIT_EXIT so a test can say "branch exists" without also forcing
+# every other git call to that exit code.
+if [ "${1:-}" = show-ref ]; then
+  exit "${SHIM_GIT_BRANCH_EXISTS:-1}"
+fi
+
 [ -n "${SHIM_GIT_OUT:-}" ] && printf '%s\n' "$SHIM_GIT_OUT"
 exit "${SHIM_GIT_EXIT:-0}"
