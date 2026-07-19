@@ -68,6 +68,26 @@ Wire it up.'
   ! grep -q '^gh api user' "$SHIM_LOG"
 }
 
+@test "work re-attaches to the surviving branch when the worktree is gone (issue #23)" {
+  work_env
+  "$HGT_BIN" work 5 --no-session >/dev/null 2>&1
+  # simulate `hgt work rm 5`: worktree dir gone, branch left intact. (The git shim doesn't
+  # actually remove the dir, so we drop it ourselves to reach the branch-exists/worktree-absent
+  # state.)
+  rm -rf "$TMP/wt/5-add-widget"
+  : >"$SHIM_LOG"  # inspect only the resume run
+
+  # SHIM_GIT_BRANCH_EXISTS=0 -> the branch-existence probe reports the branch survives
+  run env SHIM_GIT_BRANCH_EXISTS=0 "$HGT_BIN" work 5 --no-session
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"re-attaching worktree"* ]]
+  # re-attach to the existing branch — NOT `-b`, which would fail ("branch already exists")
+  grep -q "^git worktree add $TMP/wt/5-add-widget testuser/5-add-widget\$" "$SHIM_LOG"
+  ! grep -q 'worktree add -b' "$SHIM_LOG"
+  # resume: the seed commit already lives on the branch, so no re-seed / re-commit
+  ! grep -q 'commit -m' "$SHIM_LOG"
+}
+
 @test "work --base bases the worktree elsewhere (stacking)" {
   work_env
   run "$HGT_BIN" work 5 --base feature-x --no-session

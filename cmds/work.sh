@@ -282,10 +282,21 @@ cmd_work() {
     # does we fall back to an unprefixed `<n>-<slug>` rather than block local work.
     user=$(forge_current_user) || user=""
     if [ -n "$user" ]; then branch="${user}/${n}-${slug}"; else branch="${n}-${slug}"; fi
-    info "create: worktree $wtpath on $branch (base $base)"
-    run git worktree add -b "$branch" "$wtpath" "$base"
-    _carry_worktree_includes "$wtpath"
-    _seed_work_state "$n" "$title" "$url" "$body" "$wtpath" "$branch"
+    if git show-ref --verify --quiet "refs/heads/$branch"; then
+      # Worktree gone but the branch survived — the create-vs-resume split keys on the worktree
+      # dir, but `hgt work rm` deliberately leaves the branch intact (issue #23), so N→rm→N
+      # lands here. Re-attach to the existing branch: `-b` would fail ("branch already exists").
+      # This is a resume — the seed-state commit already lives on the branch, so DON'T re-seed.
+      # Still carry includes: the removed worktree took its git-ignored .env-class files with it.
+      info "resume: re-attaching worktree $wtpath to existing branch $branch"
+      run git worktree add "$wtpath" "$branch"
+      _carry_worktree_includes "$wtpath"
+    else
+      info "create: worktree $wtpath on $branch (base $base)"
+      run git worktree add -b "$branch" "$wtpath" "$base"
+      _carry_worktree_includes "$wtpath"
+      _seed_work_state "$n" "$title" "$url" "$body" "$wtpath" "$branch"
+    fi
   fi
 
   if [ "$session" -eq 1 ]; then
