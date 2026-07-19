@@ -162,12 +162,22 @@ launch_session() {
     info "resume: tmux session $name is live"
   else
     # Fresh launch: two panes — claude left, a shell right, cwd = the worktree (#24). new-session
-    # -d starts the window running claude; split-window -h adds the shell beside it (no command =
-    # your default shell); select-pane -L returns focus to claude so you land on the agent, not
-    # the shell.
-    # claude + args become the session's shell command (tmux runs it via `sh -c`). The prompt
-    # is a fixed internal string with no single quotes, so single-quoting it is safe here.
-    run tmux new-session -d -s "$name" -c "$wt" "claude -n '$name' '$prompt'"
+    # -d starts the window as a *plain shell*; send-keys types the claude command into it; then
+    # split-window -h adds a second shell beside it (no command = your default shell) and
+    # select-pane -L returns focus to claude so you land on the agent, not the shell.
+    #
+    # Why send-keys instead of `new-session ... "<cmd>"` (#47): running claude as the pane's PID 1
+    # couples its lifecycle to the pane's — when claude exits for *any* reason (e.g. a bad inherited
+    # env) the pane closes, and being the last pane, the whole session evaporates. The next
+    # split-window then fails "can't find pane", masking the real cause: a total, silent failure
+    # contradicting ADR 0003's "the detached session is the durable artifact." Launching claude
+    # *into* a live shell decouples them: if claude dies you land in a shell in the worktree with
+    # its stderr on screen — session intact, `claude --resume` available, failure visible.
+    #
+    # The prompt is a fixed internal string with no single quotes, so single-quoting it (so the
+    # shell sees claude's two args as written) is safe here.
+    run tmux new-session -d -s "$name" -c "$wt"
+    run tmux send-keys -t "$name" "claude -n '$name' '$prompt'" Enter
     run tmux split-window -h -t "$name" -c "$wt"
     run tmux select-pane -t "$name" -L
   fi
