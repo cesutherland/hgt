@@ -139,6 +139,16 @@ _tmux_attach() {
   fi
 }
 
+# _shq STRING — single-quote STRING so the pane's shell (/bin/sh is dash) re-reads it as one
+# literal word. tmux send-keys types the command into that shell, which then parses it: wrap in
+# '...' and rewrite every embedded ' as '\'' (close-quote, backslash-escaped literal quote,
+# reopen-quote). This is the only quoting dash honors — it has no bash $'...' — so ', $, `, and
+# newlines all survive verbatim (issue #25). Prints to stdout, no trailing newline.
+_shq() {
+  local s=${1//\'/\'\\\'\'}
+  printf "'%s'" "$s"
+}
+
 # launch_session N WT [TMUX] — the launcher seam (spec §4/§5). Default (TMUX=1): run the named
 # claude session inside a *detached* tmux session `<repo>/<n>-<slug>`, then attach/switch to it. The
 # detached session outlives your terminal, so crash-recovery becomes "reattach if it's alive,
@@ -148,7 +158,10 @@ _tmux_attach() {
 launch_session() {
   local n="$1" wt="$2" use_tmux="${3:-1}"
   local name; name=$(_session_name "$n" "$wt")
-  local prompt="Read .hgt/work/${n}.md and CLAUDE.md, then start on issue #${n}. Commit early and often — every commit is a recovery checkpoint. Open a PR for review; do not merge."
+  # HGT_WORK_PROMPT overrides the kickoff prompt — an internal seam the conformance suite uses to
+  # drive quoting edge-cases (', $, `, newline) through the launcher (issue #25). Local path only,
+  # so a self-set env var crosses no trust boundary.
+  local prompt="${HGT_WORK_PROMPT:-Read .hgt/work/${n}.md and CLAUDE.md, then start on issue #${n}. Commit early and often — every commit is a recovery checkpoint. Open a PR for review; do not merge.}"
 
   if [ "$use_tmux" -eq 0 ]; then
     (cd "$wt" && run claude -n "$name" "$prompt")
@@ -174,10 +187,16 @@ launch_session() {
     # *into* a live shell decouples them: if claude dies you land in a shell in the worktree with
     # its stderr on screen — session intact, `claude --resume` available, failure visible.
     #
-    # The prompt is a fixed internal string with no single quotes, so single-quoting it (so the
-    # shell sees claude's two args as written) is safe here.
+    # send-keys types this string into the pane's shell, which parses it — so every interpolated
+    # value must be shell-safe, not just this launcher's own string (issue #25). _shq single-quotes
+    # each so ', $, `, and even a newline reach claude as one literal arg instead of breaking the
+    # command apart. A newline is safe *because* it's quoted: send-keys injects it as an Enter, but
+    # inside the open '...' the shell treats that as line continuation (the `quote>` prompt), not an
+    # early submit — the final Enter (a separate send-keys arg) runs the whole command once the
+    # closing quote lands. An *unquoted* newline would split it; quoting is exactly what prevents
+    # that. (Verified against real tmux, not just an sh -c parse — see PR #49.)
     run tmux new-session -d -s "$name" -c "$wt"
-    run tmux send-keys -t "$name" "claude -n '$name' '$prompt'" Enter
+    run tmux send-keys -t "$name" "claude -n $(_shq "$name") $(_shq "$prompt")" Enter
     run tmux split-window -h -t "$name" -c "$wt"
     run tmux select-pane -t "$name" -L
   fi

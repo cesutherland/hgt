@@ -144,6 +144,34 @@ Wire it up.'
   grep '^tmux ' "$SHIM_LOG" | grep -Eo 'new-session|send-keys|split-window|select-pane' | head -4 | tr '\n' ' ' | grep -q '^new-session send-keys split-window select-pane $'
 }
 
+@test "tmux launch shell-escapes the command so ', \$, \`, and a newline reach claude intact (#25)" {
+  work_env  # has-session absent -> fresh create
+  # A prompt loaded with every char that breaks naive single-quoting: an apostrophe (closes the
+  # quote early), a $ and a backtick (expansion/command-substitution if unquoted), plus a newline
+  # (a control key send-keys injects as Enter). Driven in via the HGT_WORK_PROMPT seam.
+  export HGT_WORK_PROMPT=$'do \'not\' $merge `id`\nsecond line'
+  export SHIM_TMUX_SENDKEYS_FILE="$TMP/keys"  # tmux shim dumps the literal keystrokes here
+
+  run "$HGT_BIN" work 5
+  [ "$status" -eq 0 ]
+
+  # Re-parse the exact keystrokes hgt typed the way the pane's shell parses them (dash) and assert
+  # claude ends up with three intact args (-n, name, the whole prompt). This models the *quoting*,
+  # which is where the bug lived; it doesn't run a pty, but for _shq's single-quoted content the
+  # two converge — a newline inside the open '...' is line continuation in a real pane too, not an
+  # early submit, so the argv is identical (manually verified against tmux, see PR #49). A broken
+  # quote would instead split the prompt, run `id`, or die on a syntax error.
+  run /bin/sh -c 'claude() {
+      printf "%s" "$2" >'"$TMP"'/got_name
+      printf "%s" "$3" >'"$TMP"'/got_prompt
+    }
+    '"$(cat "$TMP/keys")"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$TMP/got_name")" = hgt/5-add-widget ]
+  # ', $, `, and the newline all survive verbatim — byte-for-byte, nothing dropped or expanded.
+  diff <(printf '%s' "$HGT_WORK_PROMPT") "$TMP/got_prompt"
+}
+
 @test "work switches the client instead of attaching when already inside tmux" {
   work_env
   TMUX=/tmp/fake,1,0 run "$HGT_BIN" work 5

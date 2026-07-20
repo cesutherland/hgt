@@ -16,5 +16,12 @@ if [ "${1:-}" = has-session ]; then
   exit "${SHIM_TMUX_HAS_SESSION:-1}"
 fi
 
+# For the #25 quoting conformance test: the flat $SHIM_LOG can't preserve a keys arg that
+# contains spaces/newlines, so dump the literal keystrokes (byte-exact) to a side file the test
+# can eval under /bin/sh. hgt always calls `send-keys -t <name> <keys> Enter`, so $4 is the keys.
+if [ "${1:-}" = send-keys ] && [ -n "${SHIM_TMUX_SENDKEYS_FILE:-}" ]; then
+  printf '%s' "$4" >"$SHIM_TMUX_SENDKEYS_FILE"
+fi
+
 [ -n "${SHIM_TMUX_OUT:-}" ] && printf '%s\n' "$SHIM_TMUX_OUT"
 exit "${SHIM_TMUX_EXIT:-0}"
