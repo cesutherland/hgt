@@ -1,12 +1,14 @@
 # hgt-execute — the Phase 2 executor: a `ready` issue becomes a PR with zero local
 # babysitting (spec §2 "Actions path", issue #51). This is NOT ci.yml — ci.yml is the
-# poor-and-powerless test gate. This job holds power (contents + pull-requests write and
-# ANTHROPIC_API_KEY), so §3's guardrails are load-bearing here, not decorative:
+# poor-and-powerless test gate. This job holds power (contents + pull-requests write and a
+# Claude auth secret), so §3's guardrails are load-bearing here, not decorative:
 #
 #   - Only `ready`-labeled issues are ever picked up (the trust boundary). The label is a
 #     human act; the ruleset keeps that human as the merge gate.
 #   - permissions is the narrow pair the action needs and NOTHING more. No `id-token: write`
 #     (never mint the OIDC token unless we federate to a cloud — one less exfil target).
+#     Auth accepts either a Claude subscription OAuth token or an API key; whichever secret
+#     is set is used (OAuth wins if both are). Neither needs OIDC.
 #   - The action is pinned to a commit SHA for v1.0.179 (≥ v1.0.94, the auth-bypass fix).
 #   - `main` is untouchable: the executor pushes a feature branch and opens a PR; branch
 #     protection rejects direct writes to `main` and forbids Actions from approving PRs.
@@ -52,6 +54,7 @@ jobs:
       - name: Execute the ready issue
         uses: anthropics/claude-code-action@b76a0776ae74036e77cd11018083743453d7ad35 # v1.0.179
         with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
             You are the hgt Actions executor. Implement issue #${{ github.event.issue.number }}
