@@ -8,7 +8,10 @@
 #   - permissions is the narrow pair the action needs and NOTHING more. No `id-token: write`
 #     (never mint the OIDC token unless we federate to a cloud — one less exfil target).
 #     Auth accepts either a Claude subscription OAuth token or an API key; whichever secret
-#     is set is used (OAuth wins if both are). Neither needs OIDC.
+#     is set is used (OAuth wins if both are). Neither needs OIDC — but without an explicit
+#     `github_token`, claude-code-action falls back to its GitHub App path, which DOES mint
+#     an OIDC token and needs `id-token: write`. Passing the workflow's own GITHUB_TOKEN
+#     skips that App/OIDC path entirely. Do not remove it; that's how #57/#13 stay closed.
 #   - The action is pinned to a commit SHA for v1.0.179 (≥ v1.0.94, the auth-bypass fix).
 #   - `main` is untouchable: the executor pushes a feature branch and opens a PR; branch
 #     protection rejects direct writes to `main` and forbids Actions from approving PRs.
@@ -54,6 +57,7 @@ jobs:
       - name: Execute the ready issue
         uses: anthropics/claude-code-action@b76a0776ae74036e77cd11018083743453d7ad35 # v1.0.179
         with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
