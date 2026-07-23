@@ -118,8 +118,9 @@ Wire it up.'
   # session created detached as a plain shell, named <repo>/<n>-<slug> + rooted in the worktree
   grep -q "^tmux new-session -d -s hgt/5-add-widget -c $TMP/wt/5-add-widget\$" "$SHIM_LOG"
   # claude launched *into* that shell via send-keys (#47) — not as the pane's PID 1, so a
-  # claude exit/failure leaves the session alive with a live shell, not an evaporated session
-  grep -q "^tmux send-keys -t hgt/5-add-widget claude -n 'hgt/5-add-widget' .* Enter\$" "$SHIM_LOG"
+  # claude exit/failure leaves the session alive with a live shell, not an evaporated session.
+  # Confined by the bwrap jail (#67): the sandbox prefix wraps the claude command.
+  grep -q "^tmux send-keys -t hgt/5-add-widget 'bwrap' .* claude -n 'hgt/5-add-widget' .* Enter\$" "$SHIM_LOG"
   # outside tmux -> attach, not switch-client
   grep -q '^tmux attach-session -t hgt/5-add-widget$' "$SHIM_LOG"
   ! grep -q '^tmux switch-client' "$SHIM_LOG"
@@ -160,11 +161,14 @@ Wire it up.'
   # which is where the bug lived; it doesn't run a pty, but for _shq's single-quoted content the
   # two converge — a newline inside the open '...' is line continuation in a real pane too, not an
   # early submit, so the argv is identical (manually verified against tmux, see PR #49). A broken
-  # quote would instead split the prompt, run `id`, or die on a syntax error.
+  # quote would instead split the prompt, run `id`, or die on a syntax error. The sandbox (#67)
+  # prefixes the keys with an _shq'd bwrap jail; a passthrough bwrap() drops its args up to the
+  # wrapped command, so the same reconstruction proves quoting survives the full jailed command.
   run /bin/sh -c 'claude() {
       printf "%s" "$2" >'"$TMP"'/got_name
       printf "%s" "$3" >'"$TMP"'/got_prompt
     }
+    bwrap() { while [ "$1" != claude ]; do shift; done; "$@"; }
     '"$(cat "$TMP/keys")"
   [ "$status" -eq 0 ]
   [ "$(cat "$TMP/got_name")" = hgt/5-add-widget ]
@@ -244,4 +248,90 @@ Wire it up.'
   run "$HGT_BIN" work rm 5
   [ "$status" -ne 0 ]
   [[ "$output" == *"no worktree"* ]]
+}
+
+# --- sandbox (#67, ADR 0005) -------------------------------------------------------------------
+# The jail is part of hgt's contract now: which bwrap flags it wraps claude in, and that it fails
+# closed rather than launch an unconfined agent. The bwrap shim execs the wrapped command, so the
+# claude-level assertions above already prove the jail is transparent; these pin the jail itself.
+
+@test "sandbox: the jail binds the worktree + shared .git rw, tmpfs's \$HOME, and clears the env" {
+  work_env  # sandbox on by default
+  run "$HGT_BIN" work 5 --no-tmux  # inline path -> bwrap prefix lands on its own log line
+  [ "$status" -eq 0 ]
+  local bw; bw=$(grep '^bwrap ' "$SHIM_LOG")
+  # worktree read-write, and the repo's shared .git (resolved via git rev-parse) read-write
+  [[ "$bw" == *"--bind $TMP/wt/5-add-widget $TMP/wt/5-add-widget"* ]]
+  [[ "$bw" == *"--bind $TMP/wt/5-add-widget/.git $TMP/wt/5-add-widget/.git"* ]]
+  # $HOME is a tmpfs (the boundary) and the env starts empty
+  [[ "$bw" == *"--tmpfs $HOME"* ]]
+  [[ "$bw" == *"--clearenv"* ]]
+  # DNS survives: the systemd-resolved dir is bound so /etc/resolv.conf's symlink resolves
+  [[ "$bw" == *"--ro-bind-try /run/systemd/resolve /run/systemd/resolve"* ]]
+  # gpg-signing forced off inside — the agent has no ~/.gnupg, can't sign as the human
+  [[ "$bw" == *"--setenv GIT_CONFIG_KEY_0 commit.gpgsign"* ]]
+  [[ "$bw" == *"GIT_CONFIG_VALUE_0 false"* ]]
+}
+
+@test "sandbox: the jail never binds ~/.ssh or the admin gh auth" {
+  work_env
+  run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  local bw; bw=$(grep '^bwrap ' "$SHIM_LOG")
+  # the two secrets the acceptance criteria name: never mounted, so unreachable by construction
+  [[ "$bw" != *".ssh"* ]]
+  [[ "$bw" != *".config/gh"* ]]
+}
+
+@test "sandbox: a host-exported secret does not cross --clearenv; HGT_SANDBOX_SETENV opts one in" {
+  work_env
+  # the guardrail: env crosses the jail only via the curated allowlist. A shell-exported secret
+  # must NOT surface as --setenv — this is the test that catches "fixing friction" by widening
+  # _SANDBOX_ENV_PASS instead of using the HGT_SANDBOX_SETENV seam.
+  TERM=xterm GH_TOKEN=sekret AWS_SECRET_ACCESS_KEY=sekret \
+    HGT_SANDBOX_SETENV=NVM_DIR NVM_DIR=/opt/nvm \
+    run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  local bw; bw=$(grep '^bwrap ' "$SHIM_LOG")
+  [[ "$bw" != *"GH_TOKEN"* ]]
+  [[ "$bw" != *"AWS_SECRET_ACCESS_KEY"* ]]
+  [[ "$bw" == *"--setenv TERM "* ]]                 # allowlisted vars still pass
+  [[ "$bw" == *"--setenv NVM_DIR /opt/nvm"* ]]      # the explicit opt-in seam works
+}
+
+@test "sandbox: HGT_SANDBOX_RO_BIND extends the read-only binds (dogfooding seam)" {
+  work_env
+  HGT_SANDBOX_RO_BIND=/opt/toolchain run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  grep '^bwrap ' "$SHIM_LOG" | grep -q -- '--ro-bind-try /opt/toolchain /opt/toolchain'
+}
+
+@test "sandbox: fails closed with the AppArmor remediation when userns is blocked" {
+  work_env
+  # SHIM_BWRAP_USERNS=1 simulates the Ubuntu-restricted box: the preflight probe can't make a userns
+  run env SHIM_BWRAP_USERNS=1 "$HGT_BIN" work 5
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"user namespace"* ]]
+  [[ "$output" == *"apparmor_parser -r"* ]]  # the exact fix, printed
+  # fail closed: no claude, no tmux session spawned
+  ! grep -q '^claude ' "$SHIM_LOG"
+  ! grep -q '^tmux new-session' "$SHIM_LOG"
+}
+
+@test "sandbox: --no-sandbox launches claude unconfined, with a warning and no bwrap" {
+  work_env
+  run "$HGT_BIN" work 5 --no-tmux --no-sandbox
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"UNCONFINED"* ]]        # loud about the trade
+  grep -q '^claude -n hgt/5-add-widget ' "$SHIM_LOG"  # launched directly, as pre-#67
+  ! grep -q '^bwrap ' "$SHIM_LOG"          # no jail
+}
+
+@test "sandbox: a resumed live tmux session is not re-jailed (already confined at launch)" {
+  work_env
+  # live session -> resume path; it must not preflight/rebuild the jail (no bwrap, no send-keys)
+  run env SHIM_TMUX_HAS_SESSION=0 "$HGT_BIN" work 5
+  [ "$status" -eq 0 ]
+  ! grep -q '^bwrap ' "$SHIM_LOG"
+  ! grep -q '^tmux send-keys' "$SHIM_LOG"
 }

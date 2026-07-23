@@ -109,7 +109,12 @@ hgt work <n>             # local execution: worktree + Claude session for issue 
   as security-sensitive code.
 - **`hgt work <n>`** creates a git worktree and a named Claude session (in a detached tmux
   session by default; `--no-tmux` launches inline), wires in the frozen snapshot, and
-  handles teardown / `--resume`.
+  handles teardown / `--resume`. The Claude session is **sandboxed** to its worktree
+  (issue #67, [ADR 0005](docs/adr/0005-issue-67-sandbox.md)): a bubblewrap FS jail wraps the
+  agent — worktree + shared `.git` read-write, the rest of `$HOME` (`~/.ssh`, admin `gh`
+  auth, sibling repos) gone — while tmux and the human's shell pane stay on the host so
+  `tmux attach` is untouched. On by default and fail-closed; `--no-sandbox` opts out. On
+  Ubuntu 24.04+ install the one-time AppArmor profile first (the preflight prints how).
 
 ## Tests & CI
 

@@ -25,6 +25,14 @@ if [ "${1:-}" = worktree ] && [ "${2:-}" = add ]; then
   done
 fi
 
+# `-C <wt> rev-parse ... --git-common-dir` — the sandbox seam (#67) asks git for the repo's
+# shared .git so it can bind-mount it into the jail. Echo `<wt>/.git` off the `-C` value (a real
+# worktree's common dir lives under the main repo, but the exact path isn't hgt's contract — that
+# it binds *the resolved common dir* is; a fixed, -C-derived answer keeps the suite hermetic).
+if [ "${1:-}" = -C ] && [ "${3:-}" = rev-parse ]; then
+  for a in "$@"; do case "$a" in --git-common-dir) printf '%s/.git\n' "$2"; exit 0 ;; esac; done
+fi
+
 # `show-ref --verify --quiet refs/heads/<branch>` — hgt's branch-existence probe that decides
 # create (-b) vs. resume (re-attach) when the worktree is absent (issue #23). Answer from
 # SHIM_GIT_BRANCH_EXISTS (default absent -> 1 = missing, so today's create path is the default),

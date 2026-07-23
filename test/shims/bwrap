@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# hgt test shim — bwrap. Dedicated (not the generic _shim symlink) because the sandbox seam
+# (#67) both probes userns support AND wraps the real claude command, so the shim must model
+# both: honor a simulated userns capability for the preflight probe, and otherwise exec the
+# wrapped command so claude-level assertions still fire — the jail is transparent at that layer,
+# with the bwrap prefix itself asserted separately via $SHIM_LOG.
+#
+# Records "bwrap <args>" to $SHIM_LOG and honors:
+#   SHIM_BWRAP_USERNS  exit code for the bare userns probe (default 0 = ok; 1 = AppArmor-blocked)
+set -euo pipefail
+printf 'bwrap %s\n' "$*" >>"${SHIM_LOG:?SHIM_LOG not set}"
+
+# Walk bwrap options by arity to find where the wrapped command begins (first non-option token).
+args=("$@"); i=0
+while [ "$i" -lt "${#args[@]}" ]; do
+  case "${args[$i]}" in
+    --die-with-parent|--unshare-all|--unshare-user|--share-net|--clearenv) i=$((i + 1)) ;;
+    --proc|--dev|--tmpfs|--chdir) i=$((i + 2)) ;;
+    --ro-bind|--ro-bind-try|--bind|--bind-try|--setenv) i=$((i + 3)) ;;
+    --*) i=$((i + 1)) ;;   # unknown flag: assume 0-arg
+    *) break ;;            # the wrapped command starts here
+  esac
+done
+cmd=("${args[@]:$i}")
+
+# The preflight probe wraps a bare `true` (no worktree bind) — honor the simulated capability
+# instead of exec'ing, so a test can force the AppArmor-blocked path (SHIM_BWRAP_USERNS=1).
+case "${cmd[0]:-}" in
+  true | /usr/bin/true | /bin/true)
+    [ "${#cmd[@]}" -eq 1 ] && exit "${SHIM_BWRAP_USERNS:-0}" ;;
+esac
+
+exec "${cmd[@]}"

@@ -14,6 +14,7 @@ Open (or resume) a local worktree + named Claude session for issue <n>.
   --base <ref>    base the new worktree here (default: HEAD — supports stacking)
   --no-session    ensure the worktree, don't launch claude
   --no-tmux       launch claude inline instead of in a detached tmux session
+  --no-sandbox    launch the agent UNCONFINED (default confines it to the worktree, #67)
   rm <n>          tear the worktree down (refuses dirty/unpushed work without --force)
 EOF
 }
@@ -149,6 +150,24 @@ _shq() {
   printf "'%s'" "$s"
 }
 
+# _prepare_sandbox WT — build the confinement prefix for a claude launch in worktree WT (#67).
+# Enabled (default): preflight bwrap and fail closed, then set HGT_SANDBOX_ARGV (a real argv, for
+# the inline path) and _SANDBOX_SQ (the same _shq-quoted with a trailing space, for the send-keys
+# string). Disabled (--no-sandbox / HGT_NO_SANDBOX=1): warn loudly and leave both empty, so the
+# unconfined launch matches the pre-#67 behavior byte-for-byte.
+_prepare_sandbox() {
+  local wt="$1" a
+  HGT_SANDBOX_ARGV=()
+  _SANDBOX_SQ=""
+  if ! sandbox_enabled; then
+    warn "sandbox: disabled — launching the agent UNCONFINED (full FS + credential access, #67)"
+    return 0
+  fi
+  sandbox_preflight
+  sandbox_argv "$wt"
+  for a in "${HGT_SANDBOX_ARGV[@]}"; do _SANDBOX_SQ+="$(_shq "$a") "; done
+}
+
 # launch_session N WT [TMUX] — the launcher seam (spec §4/§5). Default (TMUX=1): run the named
 # claude session inside a *detached* tmux session `<repo>/<n>-<slug>`, then attach/switch to it. The
 # detached session outlives your terminal, so crash-recovery becomes "reattach if it's alive,
@@ -163,8 +182,18 @@ launch_session() {
   # so a self-set env var crosses no trust boundary.
   local prompt="${HGT_WORK_PROMPT:-Read .hgt/work/${n}.md and CLAUDE.md, then start on issue #${n}. Commit early and often — every commit is a recovery checkpoint. Open a PR for review; do not merge.}"
 
+  # Sandbox seam (#67, ADR 0005): confine claude to the worktree. _prepare_sandbox preflights
+  # (fail closed) and populates HGT_SANDBOX_ARGV (the bwrap prefix) + _SANDBOX_SQ (the same,
+  # _shq-quoted, for the send-keys string the pane shell re-parses). Both are empty when
+  # --no-sandbox / HGT_NO_SANDBOX=1 opts out, so the unconfined launch is byte-identical to before.
+  # Called only on the paths that actually spawn claude — a resume reattaches an already-jailed
+  # session, so it neither preflights nor rebuilds the prefix.
+
   if [ "$use_tmux" -eq 0 ]; then
-    (cd "$wt" && run claude -n "$name" "$prompt")
+    _prepare_sandbox "$wt"
+    # Expanding an empty HGT_SANDBOX_ARGV (--no-sandbox) under set -u is safe on bash 4.4+ (the
+    # target; Kubuntu ships 5.x) — it'd trip on 3.2/4.3 if hgt ever claims broader portability.
+    (cd "$wt" && run "${HGT_SANDBOX_ARGV[@]}" claude -n "$name" "$prompt")
     return
   fi
 
@@ -195,8 +224,9 @@ launch_session() {
     # early submit — the final Enter (a separate send-keys arg) runs the whole command once the
     # closing quote lands. An *unquoted* newline would split it; quoting is exactly what prevents
     # that. (Verified against real tmux, not just an sh -c parse — see PR #49.)
+    _prepare_sandbox "$wt"
     run tmux new-session -d -s "$name" -c "$wt"
-    run tmux send-keys -t "$name" "claude -n $(_shq "$name") $(_shq "$prompt")" Enter
+    run tmux send-keys -t "$name" "${_SANDBOX_SQ}claude -n $(_shq "$name") $(_shq "$prompt")" Enter
     run tmux split-window -h -t "$name" -c "$wt"
     run tmux select-pane -t "$name" -L
   fi
@@ -271,6 +301,7 @@ cmd_work() {
       --base=*) base="${1#--base=}" ;;
       --no-session) session=0 ;;
       --no-tmux) use_tmux=0 ;;
+      --no-sandbox) export HGT_NO_SANDBOX=1 ;;
       -h | --help) _work_usage; return 0 ;;
       -*) die "hgt work: unknown flag $1" ;;
       *) [ -z "$n" ] && n="$1" || die "hgt work: unexpected argument $1" ;;

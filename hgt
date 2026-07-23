@@ -17,6 +17,8 @@ export HGT_ROOT
 source "$HGT_ROOT/lib/common.sh"
 # shellcheck source=lib/gh.sh
 source "$HGT_ROOT/lib/gh.sh"
+# shellcheck source=lib/sandbox.sh
+source "$HGT_ROOT/lib/sandbox.sh"
 
 HGT_VERSION="0.0.1-slice1"
 
