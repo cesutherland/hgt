@@ -196,3 +196,75 @@ jobs:
             - If a required change is blocked (e.g. editing `.github/workflows/**`, which
               you can edit but cannot push — `workflows: write` is withheld by design),
               STOP and say so plainly. Do NOT push a partial fix that reads as complete.
+
+      # Observability (#64): same posture as the executor — the transcript artifact is the
+      # only place that says WHY a run misbehaved. Path from `execution_file`, not a
+      # hardcoded temp path.
+      - name: Upload Claude transcript
+        if: always() && steps.collect.outputs.has_feedback == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: claude-transcript-pr-${{ github.event.pull_request.number }}
+          path: ${{ steps.respond.outputs.execution_file }}
+          retention-days: 7
+          if-no-files-found: warn
+
+      # Fail-loud gate (#62/#69), keyed on the RESPONDER's signal — the executor asks
+      # "does a PR now close this issue?", but here the PR already exists. "Did work
+      # happen?" = new commits on the PR head since the trigger, and/or a reply posted by
+      # the run. Cause-agnostic and `if: always()` so it still runs red when the respond
+      # step itself errored.
+      #
+      # Ordering matters: the workflows:write-withheld check runs BEFORE the reply signal
+      # can pass the run — an agent that edited a workflow file, couldn't push, and
+      # dutifully commented about it is still a blocked run and must go red with the named
+      # cause, not green because a comment landed.
+      - name: Guard — require pushed commits or a reply before calling this green
+        if: always() && steps.collect.outputs.has_feedback == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          pr=${{ github.event.pull_request.number }}
+          head_before="${{ steps.collect.outputs.head_before }}"
+          started="${{ steps.collect.outputs.started_at }}"
+
+          git fetch --quiet origin "$BRANCH"
+          head_after=$(git rev-parse "origin/$BRANCH")
+          pushed=false
+          [ "$head_after" != "$head_before" ] && pushed=true
+
+          # Only a *mutating* op on a workflow path implies the push-block case — a bare
+          # path match would also catch a Read done for context. Same normalization as the
+          # executor: tool_use blocks (.name/.input) and permission_denials entries
+          # (.tool_name/.tool_input).
+          if [ "$pushed" != true ]; then
+            exec_file="${{ steps.respond.outputs.execution_file }}"
+            if [ -n "${exec_file:-}" ] && [ -f "$exec_file" ]; then
+              wf=$(jq -s '[ .. | objects
+                | { n: (.name // .tool_name // ""),
+                    fp: (.input.file_path // .tool_input.file_path // ""),
+                    cmd: (.input.command // .tool_input.command // "") }
+                | select(
+                    ((.n | test("^(Edit|MultiEdit|Write)$")) and (.fp | test("\\.github/workflows/")))
+                    or ((.n == "Bash") and (.cmd | test("\\.github/workflows/")) and (.cmd | test("git push|>|>>|tee |sed -i")))
+                  ) ] | length' "$exec_file" 2>/dev/null || echo 0)
+              if [ "${wf:-0}" -gt 0 ]; then
+                echo "::error::The feedback on PR #$pr needs a change under .github/workflows/, which the responder can edit but cannot push (workflows: write withheld by design, §3). Route it to a human/local session — do not grant the responder workflow write."
+                exit 1
+              fi
+            fi
+          fi
+
+          replied=$(gh api "repos/${{ github.repository }}/issues/$pr/comments?since=$started" \
+            --jq '[.[] | select(.user.login == "github-actions[bot]")] | length')
+
+          if [ "$pushed" = true ] || [ "${replied:-0}" -gt 0 ]; then
+            echo "commits pushed: $pushed ($head_before -> $head_after); replies posted since $started: ${replied:-0}"
+            echo "Reminder (#58): GITHUB_TOKEN pushes do not re-trigger ci.yml — re-run checks by hand."
+            exit 0
+          fi
+
+          echo "::error::Run for PR #$pr pushed no commits and posted no reply — a silent no-op, failing loud instead of a silent green. Check the transcript artifact."
+          exit 1
