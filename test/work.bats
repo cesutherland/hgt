@@ -118,8 +118,9 @@ Wire it up.'
   # session created detached as a plain shell, named <repo>/<n>-<slug> + rooted in the worktree
   grep -q "^tmux new-session -d -s hgt/5-add-widget -c $TMP/wt/5-add-widget\$" "$SHIM_LOG"
   # claude launched *into* that shell via send-keys (#47) — not as the pane's PID 1, so a
-  # claude exit/failure leaves the session alive with a live shell, not an evaporated session
-  grep -q "^tmux send-keys -t hgt/5-add-widget claude -n 'hgt/5-add-widget' .* Enter\$" "$SHIM_LOG"
+  # claude exit/failure leaves the session alive with a live shell, not an evaporated session.
+  # Confined by the bwrap jail (#67): the sandbox prefix wraps the claude command.
+  grep -q "^tmux send-keys -t hgt/5-add-widget 'bwrap' .* claude -n 'hgt/5-add-widget' .* Enter\$" "$SHIM_LOG"
   # outside tmux -> attach, not switch-client
   grep -q '^tmux attach-session -t hgt/5-add-widget$' "$SHIM_LOG"
   ! grep -q '^tmux switch-client' "$SHIM_LOG"
@@ -160,11 +161,14 @@ Wire it up.'
   # which is where the bug lived; it doesn't run a pty, but for _shq's single-quoted content the
   # two converge — a newline inside the open '...' is line continuation in a real pane too, not an
   # early submit, so the argv is identical (manually verified against tmux, see PR #49). A broken
-  # quote would instead split the prompt, run `id`, or die on a syntax error.
+  # quote would instead split the prompt, run `id`, or die on a syntax error. The sandbox (#67)
+  # prefixes the keys with an _shq'd bwrap jail; a passthrough bwrap() drops its args up to the
+  # wrapped command, so the same reconstruction proves quoting survives the full jailed command.
   run /bin/sh -c 'claude() {
       printf "%s" "$2" >'"$TMP"'/got_name
       printf "%s" "$3" >'"$TMP"'/got_prompt
     }
+    bwrap() { while [ "$1" != claude ]; do shift; done; "$@"; }
     '"$(cat "$TMP/keys")"
   [ "$status" -eq 0 ]
   [ "$(cat "$TMP/got_name")" = hgt/5-add-widget ]
