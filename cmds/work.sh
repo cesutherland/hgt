@@ -19,6 +19,14 @@ Open (or resume) a local worktree + named Claude session for issue <n>.
 EOF
 }
 
+# _repo_root — the MAIN worktree's root, from any worktree or the main checkout. NOT
+# --show-toplevel: that returns the *current* worktree's root, so from inside `<base>/<n>-<slug>`
+# every sibling path mis-derives (issue #65). The shared .git is the one path that's stable
+# everywhere; the main root is its dirname. Prints to stdout.
+_repo_root() {
+  dirname "$(git rev-parse --path-format=absolute --git-common-dir)"
+}
+
 # _worktree_base — the parent dir that holds all issue worktrees. Override with HGT_WORKTREE_DIR
 # (the tests point this inside their tmpdir). Default is a sibling of the repo,
 # `../<repo>-worktrees`, so worktrees live outside the repo (no .gitignore entry).
@@ -26,7 +34,7 @@ _worktree_base() {
   if [ -n "${HGT_WORKTREE_DIR:-}" ]; then
     printf '%s' "$HGT_WORKTREE_DIR"
   else
-    local root; root=$(git rev-parse --show-toplevel)
+    local root; root=$(_repo_root)
     printf '%s/%s-worktrees' "$(dirname "$root")" "$(basename "$root")"
   fi
 }
@@ -56,10 +64,10 @@ _slug_of() { local base; base="${2##*/}"; printf '%s' "${base#"$1"-}"; }
 
 # _repo_slug — the repo label that namespaces sessions (`<repo>/...`). Slugified so it's safe in
 # a tmux session name (tmux forbids `.`/`:`, which a repo dir like `my.tool` could carry).
-# Overridable via HGT_REPO_NAME (the hermetic suite sets it; the git-toplevel default, like
-# _worktree_base's, isn't exercised there — see ADR 0002/D3). Prints to stdout.
+# Overridable via HGT_REPO_NAME (the hermetic suite usually sets it). Defaults off _repo_root,
+# not --show-toplevel: from inside a worktree the toplevel is `<n>-<slug>`, not the repo (#65).
 _repo_slug() {
-  local name; name="${HGT_REPO_NAME:-$(basename "$(git rev-parse --show-toplevel)")}"
+  local name; name="${HGT_REPO_NAME:-$(basename "$(_repo_root)")}"
   slugify "$name"
 }
 
