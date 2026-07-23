@@ -25,8 +25,9 @@ cmd=("${args[@]:$i}")
 
 # The preflight probe wraps a bare `true` (no worktree bind) — honor the simulated capability
 # instead of exec'ing, so a test can force the AppArmor-blocked path (SHIM_BWRAP_USERNS=1).
-if [ "${cmd[0]:-}" = true ] && [ "${#cmd[@]}" -eq 1 ]; then
-  exit "${SHIM_BWRAP_USERNS:-0}"
-fi
+case "${cmd[0]:-}" in
+  true | /usr/bin/true | /bin/true)
+    [ "${#cmd[@]}" -eq 1 ] && exit "${SHIM_BWRAP_USERNS:-0}" ;;
+esac
 
 exec "${cmd[@]}"

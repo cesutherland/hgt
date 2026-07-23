@@ -30,8 +30,15 @@ sandbox_enabled() { [ "${HGT_NO_SANDBOX:-0}" != 1 ]; }
 # Ubuntu 24.04 unprivileged userns is AppArmor-restricted and bwrap isn't setuid, so this fails
 # with "setting up uid map: Permission denied" until the profile (templates/apparmor/bwrap) is
 # installed. Cheaper to just try than to parse sysctls + profile state.
+#
+# Bind the loader dirs (/lib, /lib64) alongside /usr and exec an ABSOLUTE /usr/bin/true: it's
+# dynamically linked, so a /usr-only jail can't find its ELF interpreter under /lib64 and execvp
+# fails with ENOENT ("No such file or directory") *even when userns setup — the thing we're
+# testing — succeeded*. A too-thin probe would misread that as "userns blocked" and wrongly emit
+# the AppArmor remediation. So the probe mirrors the real jail's system binds.
 _sandbox_userns_ok() {
-  bwrap --unshare-user --ro-bind /usr /usr true 2>/dev/null
+  bwrap --unshare-user --ro-bind /usr /usr --ro-bind-try /lib /lib --ro-bind-try /lib64 /lib64 \
+    /usr/bin/true 2>/dev/null
 }
 
 # sandbox_preflight — fail closed with exact remediation if we can't jail. Called before every

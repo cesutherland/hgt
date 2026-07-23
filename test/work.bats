@@ -283,6 +283,21 @@ Wire it up.'
   [[ "$bw" != *".config/gh"* ]]
 }
 
+@test "sandbox: a host-exported secret does not cross --clearenv; HGT_SANDBOX_SETENV opts one in" {
+  work_env
+  # the guardrail: env crosses the jail only via the curated allowlist. A shell-exported secret
+  # must NOT surface as --setenv — this is the test that catches "fixing friction" by widening
+  # _SANDBOX_ENV_PASS instead of using the HGT_SANDBOX_SETENV seam.
+  GH_TOKEN=sekret AWS_SECRET_ACCESS_KEY=sekret HGT_SANDBOX_SETENV=NVM_DIR NVM_DIR=/opt/nvm \
+    run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  local bw; bw=$(grep '^bwrap ' "$SHIM_LOG")
+  [[ "$bw" != *"GH_TOKEN"* ]]
+  [[ "$bw" != *"AWS_SECRET_ACCESS_KEY"* ]]
+  [[ "$bw" == *"--setenv TERM "* ]]                 # allowlisted vars still pass
+  [[ "$bw" == *"--setenv NVM_DIR /opt/nvm"* ]]      # the explicit opt-in seam works
+}
+
 @test "sandbox: HGT_SANDBOX_RO_BIND extends the read-only binds (dogfooding seam)" {
   work_env
   HGT_SANDBOX_RO_BIND=/opt/toolchain run "$HGT_BIN" work 5 --no-tmux
