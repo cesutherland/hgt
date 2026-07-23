@@ -130,3 +130,33 @@ jobs:
           path: ${{ steps.execute.outputs.execution_file }}
           retention-days: 7
           if-no-files-found: warn
+
+      # Fail loud on the #69 failure mode: the executor was handed a task that needs to
+      # edit `.github/workflows/**`, which it cannot do (claude-code-action write-protects
+      # that path, and GITHUB_TOKEN lacks `workflows: write` by design — §3). Left alone
+      # that ends in a silent green no-op. Scan the transcript for a *denied* Edit/Write/
+      # Bash touching a workflow path and turn it into a named, red failure that says
+      # "route this to a human," instead of making someone spelunk the artifact.
+      #
+      # `jq -s` slurps regardless of array-vs-JSONL framing; `..` finds permission_denials
+      # wherever the action parks them. Distinct from #62's cause-agnostic no-PR guard:
+      # this one names the reason AND catches a partial ship (PR opened, workflow edit
+      # silently dropped) that the no-PR check would miss.
+      - name: Fail loud if the task needed a workflow-file edit
+        if: always()
+        run: |
+          set -euo pipefail
+          exec_file="${{ steps.execute.outputs.execution_file }}"
+          [ -n "${exec_file:-}" ] && [ -f "$exec_file" ] || exit 0
+
+          blocked=$(jq -s '
+            [ .. | objects | select(has("permission_denials")) | .permission_denials[]
+              | (.tool_input.file_path // "") + " " + (.tool_input.command // "")
+              | select(test("\\.github/workflows/")) ]' "$exec_file")
+
+          if [ "$(echo "$blocked" | jq "length")" -gt 0 ]; then
+            echo "::error::This issue requires editing a file under .github/workflows/, which the executor cannot do (workflows:write withheld by design, §3). Route it to a human/local session — do not grant the executor workflow write."
+            echo "Denied workflow-file operations:"
+            echo "$blocked" | jq -r '.[] | "  \(.)"'
+            exit 1
+          fi
