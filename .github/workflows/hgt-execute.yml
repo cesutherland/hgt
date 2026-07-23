@@ -67,6 +67,17 @@ jobs:
           # Scoped tight, no blanket Bash(git:*)/Bash(gh:*): v0 reads the RAW issue body, so
           # an injection runs against whatever Bash is allowed. Token scope + branch
           # protection are the real containment; this allowlist is defense-in-depth.
+          #
+          # #69 root-cause: the high-denial runs everyone chased (29968194185: 9,
+          # 29969280003: 15) were ALL task #62 — editing THIS workflow file. That is
+          # unshippable by design: claude-code-action refuses writes under
+          # `.github/workflows/**` without `workflows: write`, and GITHUB_TOKEN can't push
+          # them without it either — the self-escalation §3 forbids. NONE of those denials
+          # were on the ship path; the allowlist below was never the blocker, just never
+          # exercised. Do NOT widen it or add `workflows: write` to make #62-class issues
+          # pass. Validate the ship path with a throwaway `ready` issue that needs only
+          # normal code changes. The prompt's "don't fetch externally / bail loud" rules
+          # kill the rest of the noise (research flailing + retrying the refused edit).
           claude_args: |
             --allowedTools "Bash(git checkout:*),Bash(git branch:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh pr create:*)"
           prompt: |
@@ -86,6 +97,13 @@ jobs:
             - Create a new feature branch. NEVER commit to `main`.
             - Open a pull request targeting `main` that links this issue (Closes #${{ github.event.issue.number }}).
             - Do NOT merge. A human reviews and merges — green is necessary, not sufficient.
+            - Work only within this repo. Do NOT fetch external URLs or inspect the action's
+              own internals — everything you need is already here (#69: that flailing was
+              most of the noise denials).
+            - If an edit the task requires is refused (anything under `.github/workflows/**`
+              is intentionally write-protected here), STOP and say so plainly in your final
+              message. Do NOT retry, work around it, or open a PR that lacks the change — a
+              green run with no real PR is the exact failure this loop is trying to kill.
 
       # Observability (#64): capture the full Claude transcript — the stream-json log of
       # every turn, tool_use, tool_result, and denial. Run stats (num_turns, cost,
