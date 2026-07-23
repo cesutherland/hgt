@@ -55,6 +55,7 @@ jobs:
       # Providing `prompt` runs the action in autonomous agent mode — no @claude mention.
       # Pinned to a commit SHA (§3: pin actions; don't drift). Comment names the tag.
       - name: Execute the ready issue
+        id: execute
         uses: anthropics/claude-code-action@b76a0776ae74036e77cd11018083743453d7ad35 # v1.0.179
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -77,3 +78,29 @@ jobs:
             - Create a new feature branch. NEVER commit to `main`.
             - Open a pull request targeting `main` that links this issue (Closes #${{ github.event.issue.number }}).
             - Do NOT merge. A human reviews and merges — green is necessary, not sufficient.
+
+      # Observability (#64): capture the full Claude transcript — the stream-json log of
+      # every turn, tool_use, tool_result, and denial. Run stats (num_turns, cost,
+      # permission_denials_count) tell you a run misbehaved; only the transcript tells you
+      # WHY (cf. #61: 14 denials, no PR, green check — invisible without this).
+      #
+      # Artifact, NOT `show_full_output: true`: a deliberate download that's structured,
+      # greppable, expiring, and redactable — not a firehose into the Actions logs. This
+      # posture is correct regardless of repo visibility; §3's real invariant is that the
+      # executor holds nothing worth leaking (powerless-reader / privileged-actor split).
+      # Visibility is only a blast-radius reducer, NOT the safety mechanism.
+      #
+      # CAVEAT: when the executor eventually reads sensitive context (snapshots/secrets —
+      # #39/#40/#41), the transcript will contain it and MUST be redacted at capture. A
+      # public/private toggle is not that mechanism. Redaction is the fast-follow, not here.
+      #
+      # Path comes from the action's `execution_file` output, not a hardcoded temp path —
+      # the output survives if the action relocates the file.
+      - name: Upload Claude transcript
+        if: always() # capture on failure too — misbehaving runs are the point
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: claude-transcript-${{ github.event.issue.number }}
+          path: ${{ steps.execute.outputs.execution_file }}
+          retention-days: 7
+          if-no-files-found: warn
