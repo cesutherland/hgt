@@ -279,6 +279,41 @@ Wire it up.'
   grep -q "^git worktree remove $TMP/hgt-worktrees/5-add-widget\$" "$SHIM_LOG"
 }
 
+@test "work create lands the new worktree flat under the main repo, not nested under cwd's worktree (#78)" {
+  unset TMUX
+  mkdir -p "$TMP/hgt" "$TMP/hgt-worktrees/9-other-issue"
+  export SHIM_GIT_COMMON_DIR="$TMP/hgt/.git"  # what real git answers from any worktree
+  export SHIM_GH_OUT='number=5
+url=https://github.com/cesutherland/hgt/issues/5
+title=Add a Widget
+---body---
+Build the widget.'
+  cd "$TMP/hgt-worktrees/9-other-issue"  # inside an unrelated, already-existing worktree
+
+  run "$HGT_BIN" work 5 --no-session
+  [ "$status" -eq 0 ]
+  # flat: <main-repo>-worktrees/5-<slug>, a sibling of 9-other-issue, never nested under it
+  grep -q "^git worktree add -b testuser/5-add-widget $TMP/hgt-worktrees/5-add-widget HEAD\$" "$SHIM_LOG"
+  ! grep -q '9-other-issue/5-add-widget' "$SHIM_LOG"
+}
+
+@test "work create names the session hgt/<n>-<slug>, never <worktree-slug>/<n>-<slug>, from inside a worktree (#78)" {
+  unset TMUX
+  mkdir -p "$TMP/hgt" "$TMP/hgt-worktrees/9-other-issue"
+  export SHIM_GIT_COMMON_DIR="$TMP/hgt/.git"
+  export SHIM_GH_OUT='number=5
+url=https://github.com/cesutherland/hgt/issues/5
+title=Add a Widget
+---body---
+Build the widget.'
+  cd "$TMP/hgt-worktrees/9-other-issue"  # has-session absent (default) -> fresh create
+
+  run "$HGT_BIN" work 5
+  [ "$status" -eq 0 ]
+  grep -q "^tmux new-session -d -s hgt/5-add-widget -c $TMP/hgt-worktrees/5-add-widget\$" "$SHIM_LOG"
+  ! grep -q '9-other-issue/5-add-widget' "$SHIM_LOG"
+}
+
 # --- sandbox (#67, ADR 0005) -------------------------------------------------------------------
 # The jail is part of hgt's contract now: which bwrap flags it wraps claude in, and that it fails
 # closed rather than launch an unconfined agent. The bwrap shim execs the wrapped command, so the
