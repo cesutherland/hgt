@@ -60,6 +60,14 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # The action's default policy allows file edits + read-only git but NOT arbitrary
+          # Bash — so branch/push/PR are denied and the job ships nothing (#61, run
+          # 29883439700: 14 denials, no PR). Grant the exact verbs the ship path needs.
+          # Scoped tight, no blanket Bash(git:*)/Bash(gh:*): v0 reads the RAW issue body, so
+          # an injection runs against whatever Bash is allowed. Token scope + branch
+          # protection are the real containment; this allowlist is defense-in-depth.
+          claude_args: |
+            --allowedTools "Bash(git checkout:*),Bash(git branch:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh pr create:*)"
           prompt: |
             You are the hgt Actions executor. Implement issue #${{ github.event.issue.number }}
             in ${{ github.repository }}.
