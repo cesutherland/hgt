@@ -162,7 +162,11 @@ jobs:
             -f owner="${{ github.repository_owner }}" \
             -f repo="${{ github.event.repository.name }}" \
             -F number="$issue" \
-            --jq '.data.repository.issue.closedByPullRequestsReferences.nodes')
+            --jq '[.data.repository.issue.closedByPullRequestsReferences.nodes[] | select(.state != "CLOSED")]')
+
+          # Drop CLOSED-unmerged PRs: a dead PR from a botched earlier attempt would satisfy
+          # the gate forever, so a re-labeled issue whose re-run no-ops would pass green —
+          # the exact failure this gate exists to kill. OPEN + MERGED are the states that count.
 
           if [ "$(echo "$linked_prs" | jq 'length')" -gt 0 ]; then
             echo "PR(s) linking issue #$issue:"
