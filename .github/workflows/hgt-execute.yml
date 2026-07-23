@@ -67,6 +67,17 @@ jobs:
           # Scoped tight, no blanket Bash(git:*)/Bash(gh:*): v0 reads the RAW issue body, so
           # an injection runs against whatever Bash is allowed. Token scope + branch
           # protection are the real containment; this allowlist is defense-in-depth.
+          #
+          # #69 root-cause: the high-denial runs everyone chased (29968194185: 9,
+          # 29969280003: 15) were ALL task #62 — editing THIS workflow file. That is
+          # unshippable by design: claude-code-action refuses writes under
+          # `.github/workflows/**` without `workflows: write`, and GITHUB_TOKEN can't push
+          # them without it either — the self-escalation §3 forbids. NONE of those denials
+          # were on the ship path; the allowlist below was never the blocker, just never
+          # exercised. Do NOT widen it or add `workflows: write` to make #62-class issues
+          # pass. Validate the ship path with a throwaway `ready` issue that needs only
+          # normal code changes. The prompt's "don't fetch externally / bail loud" rules
+          # kill the rest of the noise (research flailing + retrying the refused edit).
           claude_args: |
             --allowedTools "Bash(git checkout:*),Bash(git branch:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh pr create:*)"
           prompt: |
@@ -86,6 +97,13 @@ jobs:
             - Create a new feature branch. NEVER commit to `main`.
             - Open a pull request targeting `main` that links this issue (Closes #${{ github.event.issue.number }}).
             - Do NOT merge. A human reviews and merges — green is necessary, not sufficient.
+            - Work only within this repo. Do NOT fetch external URLs or inspect the action's
+              own internals — everything you need is already here (#69: that flailing was
+              most of the noise denials).
+            - If an edit the task requires is refused (anything under `.github/workflows/**`
+              is intentionally write-protected here), STOP and say so plainly in your final
+              message. Do NOT retry, work around it, or open a PR that lacks the change — a
+              green run with no real PR is the exact failure this loop is trying to kill.
 
       # Observability (#64): capture the full Claude transcript — the stream-json log of
       # every turn, tool_use, tool_result, and denial. Run stats (num_turns, cost,
@@ -112,3 +130,33 @@ jobs:
           path: ${{ steps.execute.outputs.execution_file }}
           retention-days: 7
           if-no-files-found: warn
+
+      # Fail loud on the #69 failure mode: the executor was handed a task that needs to
+      # edit `.github/workflows/**`, which it cannot do (claude-code-action write-protects
+      # that path, and GITHUB_TOKEN lacks `workflows: write` by design — §3). Left alone
+      # that ends in a silent green no-op. Scan the transcript for a *denied* Edit/Write/
+      # Bash touching a workflow path and turn it into a named, red failure that says
+      # "route this to a human," instead of making someone spelunk the artifact.
+      #
+      # `jq -s` slurps regardless of array-vs-JSONL framing; `..` finds permission_denials
+      # wherever the action parks them. Distinct from #62's cause-agnostic no-PR guard:
+      # this one names the reason AND catches a partial ship (PR opened, workflow edit
+      # silently dropped) that the no-PR check would miss.
+      - name: Fail loud if the task needed a workflow-file edit
+        if: always()
+        run: |
+          set -euo pipefail
+          exec_file="${{ steps.execute.outputs.execution_file }}"
+          [ -n "${exec_file:-}" ] && [ -f "$exec_file" ] || exit 0
+
+          blocked=$(jq -s '
+            [ .. | objects | select(has("permission_denials")) | .permission_denials[]
+              | (.tool_input.file_path // "") + " " + (.tool_input.command // "")
+              | select(test("\\.github/workflows/")) ]' "$exec_file")
+
+          if [ "$(echo "$blocked" | jq "length")" -gt 0 ]; then
+            echo "::error::This issue requires editing a file under .github/workflows/, which the executor cannot do (workflows:write withheld by design, §3). Route it to a human/local session — do not grant the executor workflow write."
+            echo "Denied workflow-file operations:"
+            echo "$blocked" | jq -r '.[] | "  \(.)"'
+            exit 1
+          fi
