@@ -16,9 +16,11 @@ _SANDBOX_RO_DEPS='.nvm .local .gitconfig .gitconfig.local'
 # claude's own state + the Anthropic credential it must hold to call the API — read-write
 # because claude updates them at runtime. Unavoidable exposure (ADR 0005 residuals).
 _SANDBOX_RW_DEPS='.claude .claude.json'
-# Host env vars passed through --clearenv. Curated so shell-exported secrets (GH_TOKEN, cloud
-# creds) don't leak into the jail via the environment. Extend via HGT_SANDBOX_SETENV.
-_SANDBOX_ENV_PASS='HOME PATH TERM LANG LC_ALL LC_CTYPE'
+# Host env vars passed through --clearenv. Deliberately thin — curated so shell-exported secrets
+# (GH_TOKEN, cloud creds) don't leak into the jail via the environment. This is the likeliest
+# first friction on a live run (a runtime that wants NVM_DIR/XDG_*/etc. won't find it); the fix
+# is a config change, not code — extend via HGT_SANDBOX_SETENV rather than widening this default.
+_SANDBOX_ENV_PASS='HOME USER LOGNAME PATH TERM LANG LC_ALL LC_CTYPE'
 
 # sandbox_enabled — is the jail in force? On by default (fail closed); HGT_NO_SANDBOX=1 or the
 # --no-sandbox flag (which sets it) is the explicit opt-out.
@@ -56,8 +58,10 @@ sandbox_preflight() {
 sandbox_argv() {
   local wt="$1" gitdir dep extra
   # A worktree's .git points into <main-repo>/.git/worktrees/<name>; git needs the shared common
-  # dir (objects, refs) to do anything. Resolve it absolute so the bind target is stable.
-  gitdir=$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir)
+  # dir (objects, refs) to do anything. Resolve it absolute so the bind target is stable. Fail
+  # closed with a legible message rather than letting raw set -e surface git's error mid-argv.
+  gitdir=$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir) \
+    || die "sandbox: couldn't resolve the git dir for worktree $wt (not a git worktree?)"
 
   HGT_SANDBOX_ARGV=(
     bwrap

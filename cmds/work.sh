@@ -191,6 +191,8 @@ launch_session() {
 
   if [ "$use_tmux" -eq 0 ]; then
     _prepare_sandbox "$wt"
+    # Expanding an empty HGT_SANDBOX_ARGV (--no-sandbox) under set -u is safe on bash 4.4+ (the
+    # target; Kubuntu ships 5.x) — it'd trip on 3.2/4.3 if hgt ever claims broader portability.
     (cd "$wt" && run "${HGT_SANDBOX_ARGV[@]}" claude -n "$name" "$prompt")
     return
   fi
