@@ -1,0 +1,135 @@
+# hgt-review — the async review responder (issue #83): addresses PR review feedback on the
+# PR branch, the Actions counterpart to the local `hgt review` (#18) + review-response
+# skill (#19). Mirrors hgt-execute's hard-won posture (#54→#60→#63→#66→#71/#76). This job
+# holds power (contents + pull-requests write and a Claude auth secret), so §3's guardrails
+# are load-bearing here too:
+#
+#   - Trigger is the `address` label on a PR — a deliberate human act, the parallel to
+#     `ready`. Gated twice on top of the label: same-repo PRs only (no forks), and the
+#     labeler must hold write access — labeling only needs triage, and PR comments are a
+#     broader, lower-trust surface than issue bodies.
+#   - pull_request_target, NOT pull_request: pull_request_target runs THIS file from the
+#     default branch, so a PR branch cannot ship a self-escalating variant of this workflow
+#     — the same §3 neutralization the executor gets from `issues` events. Checking out the
+#     PR head under pull_request_target is the classic footgun, which is exactly why the
+#     label + write-access gates are mandatory, not decorative.
+#   - permissions is the narrow pair the action needs and NOTHING more. No `id-token:
+#     write`; the explicit `github_token` skips the App/OIDC path (#57/#13). The action is
+#     SHA-pinned (≥ v1.0.94, the auth-bypass fix).
+#   - The responder acts ONLY on the PR branch. It never merges, approves, or resolves
+#     threads — the human gate stays. Branch protection keeps `main` untouchable.
+#
+# v0 feeds RAW review-comment text to the agent — there is no `ready`-style frozen
+# snapshot on the PR side (#39/#40/#41 are issue-side machinery), so this is a wider
+# untrusted-input door. The gates above (a write-access human deliberately labels) plus
+# prompt framing are the containment; sanitization is a separate follow-up.
+#
+# Inherited gotcha (#58): commits pushed with GITHUB_TOKEN do NOT re-trigger ci.yml — the
+# prompt has the agent say so in its summary comment so a human re-runs checks.
+name: hgt-review
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: hgt-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  respond:
+    name: respond
+    if: >
+      github.event.label.name == 'address' &&
+      github.event.pull_request.state == 'open' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      # Labeling only requires triage; hold the trigger to write+. Fails closed: an API
+      # error reads as no access.
+      - name: Gate — labeler must have write access
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          perm=$(gh api "repos/${{ github.repository }}/collaborators/${{ github.actor }}/permission" --jq '.permission' || echo none)
+          case "$perm" in
+            admin|maintain|write) echo "@${{ github.actor }} has $perm access" ;;
+            *) echo "::error::@${{ github.actor }} lacks write access ($perm) — refusing to run."; exit 1 ;;
+          esac
+
+      # The PR head, not the default pull_request_target base. Full history so the agent
+      # can diff against main. Pinned to match ci.yml.
+      - name: Check out the PR branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      # Snapshot the trigger state the fail-loud guard compares against, then collect the
+      # outstanding feedback (unresolved review threads + review summaries) for the prompt.
+      # "Outstanding" = unresolved threads, or a CHANGES_REQUESTED review decision — review
+      # bodies alone never resolve, so they can't be the trigger signal or a re-label after
+      # everything is addressed would loop on stale text forever.
+      #
+      # The heredoc delimiter is a uuid: feedback is untrusted text, and a guessable
+      # delimiter would let a crafted comment terminate the block and set arbitrary step
+      # outputs.
+      - name: Collect outstanding review feedback
+        id: collect
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "head_before=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+          resp=$(gh api graphql \
+            -f query='
+              query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $number) {
+                    reviewDecision
+                    reviews(last: 20) {
+                      nodes { author { login } state body }
+                    }
+                    reviewThreads(first: 100) {
+                      nodes {
+                        isResolved path line
+                        comments(first: 20) { nodes { author { login } body } }
+                      }
+                    }
+                  }
+                }
+              }' \
+            -f owner="${{ github.repository_owner }}" \
+            -f repo="${{ github.event.repository.name }}" \
+            -F number="${{ github.event.pull_request.number }}")
+
+          unresolved=$(echo "$resp" | jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not)] | length')
+          decision=$(echo "$resp" | jq -r '.data.repository.pullRequest.reviewDecision // ""')
+
+          if [ "$unresolved" -eq 0 ] && [ "$decision" != "CHANGES_REQUESTED" ]; then
+            echo "has_feedback=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No outstanding review feedback on PR #${{ github.event.pull_request.number }} — nothing to do."
+            exit 0
+          fi
+          echo "has_feedback=true" >> "$GITHUB_OUTPUT"
+
+          feedback=$(echo "$resp" | jq -r '
+            .data.repository.pullRequest as $pr |
+            ([$pr.reviews.nodes[]
+               | select((.body // "") != "" and (.state == "CHANGES_REQUESTED" or .state == "COMMENTED"))
+               | "### Review by @\(.author.login // "ghost") [\(.state)]\n\(.body)\n"]
+             + [$pr.reviewThreads.nodes[]
+               | select(.isResolved | not)
+               | "### Unresolved thread — \(.path):\(.line // "?")\n"
+                 + ([.comments.nodes[] | "@\(.author.login // "ghost"): \(.body)"] | join("\n")) + "\n"])
+            | join("\n")')
+
+          delim="HGT_FEEDBACK_$(uuidgen)"
+          { echo "feedback<<$delim"; echo "$feedback"; echo "$delim"; } >> "$GITHUB_OUTPUT"
