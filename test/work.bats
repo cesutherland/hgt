@@ -266,6 +266,8 @@ Wire it up.'
   # $HOME is a tmpfs (the boundary) and the env starts empty
   [[ "$bw" == *"--tmpfs $HOME"* ]]
   [[ "$bw" == *"--clearenv"* ]]
+  # DNS survives: the systemd-resolved dir is bound so /etc/resolv.conf's symlink resolves
+  [[ "$bw" == *"--ro-bind-try /run/systemd/resolve /run/systemd/resolve"* ]]
   # gpg-signing forced off inside — the agent has no ~/.gnupg, can't sign as the human
   [[ "$bw" == *"--setenv GIT_CONFIG_KEY_0 commit.gpgsign"* ]]
   [[ "$bw" == *"GIT_CONFIG_VALUE_0 false"* ]]

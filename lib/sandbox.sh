@@ -72,6 +72,12 @@ sandbox_argv() {
     --ro-bind-try /bin /bin --ro-bind-try /sbin /sbin
     --ro-bind-try /lib /lib --ro-bind-try /lib64 /lib64
     --ro-bind /etc /etc
+    # DNS: on systemd-resolved boxes /etc/resolv.conf symlinks into /run, which the jail doesn't
+    # bind — the link would dangle and glibc falls back to 127.0.0.1:53 (the stub is on
+    # 127.0.0.53), killing name resolution. Bind the resolver dir so the link resolves; -try keeps
+    # plain-/etc/resolv.conf boxes working. NOTE: this only works because --share-net shares
+    # loopback — an --unshare-net egress allowlist (#74) must handle DNS explicitly.
+    --ro-bind-try /run/systemd/resolve /run/systemd/resolve
     --proc /proc --dev /dev --tmpfs /tmp
     --tmpfs "$HOME"            # THE boundary: everything under $HOME is gone unless re-bound below
   )
