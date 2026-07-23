@@ -33,6 +33,15 @@ if [ "${1:-}" = -C ] && [ "${3:-}" = rev-parse ]; then
   for a in "$@"; do case "$a" in --git-common-dir) printf '%s/.git\n' "$2"; exit 0 ;; esac; done
 fi
 
+# `rev-parse ... --git-common-dir` (no -C) — the main-repo resolver behind _worktree_base /
+# _repo_slug (#65). SHIM_GIT_COMMON_DIR lets a test stand inside a fake worktree and still get
+# the main repo's .git; default $PWD/.git models running from the main checkout.
+if [ "${1:-}" = rev-parse ]; then
+  for a in "$@"; do
+    case "$a" in --git-common-dir) printf '%s\n' "${SHIM_GIT_COMMON_DIR:-$PWD/.git}"; exit 0 ;; esac
+  done
+fi
+
 # `show-ref --verify --quiet refs/heads/<branch>` — hgt's branch-existence probe that decides
 # create (-b) vs. resume (re-attach) when the worktree is absent (issue #23). Answer from
 # SHIM_GIT_BRANCH_EXISTS (default absent -> 1 = missing, so today's create path is the default),

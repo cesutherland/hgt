@@ -250,6 +250,35 @@ Wire it up.'
   [[ "$output" == *"no worktree"* ]]
 }
 
+# --- default path derivation (#65) -------------------------------------------------------------
+# No HGT_WORKTREE_DIR / HGT_REPO_NAME here: these pin the git-derived defaults the rest of the
+# suite overrides away. Base + repo label must come off the MAIN repo (dirname of the shared
+# .git), never cwd's worktree — from inside `<base>/5-add-widget`, --show-toplevel would double
+# the tail into `…/5-add-widget-worktrees` and rm would find nothing.
+
+@test "work rm works from inside the issue's worktree (#65)" {
+  unset TMUX
+  mkdir -p "$TMP/hgt" "$TMP/hgt-worktrees/5-add-widget"
+  export SHIM_GIT_COMMON_DIR="$TMP/hgt/.git"  # what real git answers from any worktree
+  cd "$TMP/hgt-worktrees/5-add-widget"
+
+  run env SHIM_TMUX_HAS_SESSION=0 "$HGT_BIN" work rm 5
+  [ "$status" -eq 0 ]
+  grep -q "^git worktree remove $TMP/hgt-worktrees/5-add-widget\$" "$SHIM_LOG"
+  # repo label also derived off the main repo (hgt), not the worktree dir (5-add-widget)
+  grep -q '^tmux kill-session -t hgt/5-add-widget$' "$SHIM_LOG"
+}
+
+@test "work rm works from the main checkout with the default worktree base (#65)" {
+  unset TMUX
+  mkdir -p "$TMP/hgt" "$TMP/hgt-worktrees/5-add-widget"
+  cd "$TMP/hgt"  # SHIM_GIT_COMMON_DIR unset -> shim answers $PWD/.git, the main-checkout case
+
+  run "$HGT_BIN" work rm 5
+  [ "$status" -eq 0 ]
+  grep -q "^git worktree remove $TMP/hgt-worktrees/5-add-widget\$" "$SHIM_LOG"
+}
+
 # --- sandbox (#67, ADR 0005) -------------------------------------------------------------------
 # The jail is part of hgt's contract now: which bwrap flags it wraps claude in, and that it fails
 # closed rather than launch an unconfined agent. The bwrap shim execs the wrapped command, so the
