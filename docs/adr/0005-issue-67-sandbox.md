@@ -33,7 +33,8 @@ Code's own permission mode is tool-level, not OS-level — a complement, not a s
 
 - **rw:** the issue's worktree, and the repo's shared `.git` common dir (a worktree's `.git`
   is a pointer into `<main-repo>/.git/worktrees/<name>`, so git needs the common dir to
-  function — commit, log, push).
+  function — commit, log, push). Binding the *whole* common dir rw is broader than the
+  worktree, though — see residuals (#75).
 - **ro:** system dirs (`/usr`, `/etc`, `/bin`…), the git identity (`~/.gitconfig[.local]` —
   name/email, not a credential), and the claude runtime, which lives under `$HOME` on this box
   (`~/.nvm` for node, `~/.local` for the launcher). These are re-bound over the tmpfs below.
@@ -97,6 +98,13 @@ The preflight prints these commands verbatim when the jail can't start.
   token — and the whole worktree — to any host. So AC #2 holds *structurally* (no admin `gh`), but
   "reach **only** a scoped credential/network" does not until egress is constrained (proxy or
   netns+nftables). Prioritized alongside #73 — the two are the escape+exfil pair.
+- **The `.git` bind confines to the repo, not the worktree (#75).** Worktrees share the object
+  store + refs, so rw-binding the common `.git` lets the agent rewrite any ref (incl. local
+  `main`), write `.git/hooks/*` (a host-executed hook — an escape, same class as #73), and read
+  every branch. Local-only (pushes fail closed, no token), but wider than "confine to the
+  worktree." Fix: bind the common dir ro and selectively re-bind rw only `objects/`, this
+  worktree's dir, and its own branch ref/reflog. The read-all-branches part is inherent to
+  sharing the object store (it's the repo's own code) — only a full independent clone removes it.
 - **Scoped push token not provisioned.** The `HGT_SANDBOX_GITHUB_TOKEN` seam exists but no
   machine-user PAT is wired yet, so pushes from inside the jail fail closed until one is. That
   provisioning is its own slice.
