@@ -19,83 +19,8 @@ Open (or resume) a local worktree + named Claude session for issue <n>.
 EOF
 }
 
-# _repo_root — the MAIN worktree's root, from any worktree or the main checkout. NOT
-# --show-toplevel: that returns the *current* worktree's root, so from inside `<base>/<n>-<slug>`
-# every sibling path mis-derives (issue #65). The shared .git is the one path that's stable
-# everywhere; the main root is its dirname. Prints to stdout.
-_repo_root() {
-  dirname "$(git rev-parse --path-format=absolute --git-common-dir)"
-}
-
-# _worktree_base — the parent dir that holds all issue worktrees. Override with HGT_WORKTREE_DIR
-# (the tests point this inside their tmpdir). Default is a sibling of the repo,
-# `../<repo>-worktrees`, so worktrees live outside the repo (no .gitignore entry).
-_worktree_base() {
-  if [ -n "${HGT_WORKTREE_DIR:-}" ]; then
-    printf '%s' "$HGT_WORKTREE_DIR"
-  else
-    local root; root=$(_repo_root)
-    printf '%s/%s-worktrees' "$(dirname "$root")" "$(basename "$root")"
-  fi
-}
-
-# _worktree_path N SLUG — the worktree path for issue N, `<base>/<n>-<slug>` (issue #36). The
-# slug rides along for human readability; N is the stable key. Used at *create*, where the slug
-# is in hand. Prints to stdout.
-_worktree_path() { printf '%s/%s-%s' "$(_worktree_base)" "$1" "$2"; }
-
-# _find_worktree N — the existing worktree dir for issue N, found by globbing `<base>/<n>-*`,
-# empty if none. This is how resume + teardown recover the (drift-carrying) slug from N alone:
-# the worktree dir is the durable, N-keyed artifact, so no title lookup is needed and a retitled
-# issue still resolves to its original dir. Prints the first match to stdout.
-_find_worktree() {
-  local n="$1" base d
-  base=$(_worktree_base)
-  for d in "$base/$n"-*; do
-    [ -d "$d" ] && { printf '%s' "$d"; return 0; }
-  done
-  return 0  # no match: print nothing, succeed (an unmatched glob must not trip set -e)
-}
-
-# _slug_of N WT — recover the slug from a worktree dir path `<base>/<n>-<slug>` (strip the
-# `<n>-` prefix off the basename). The dir is the source of truth, so the slug survives a
-# retitle. Prints to stdout.
-_slug_of() { local base; base="${2##*/}"; printf '%s' "${base#"$1"-}"; }
-
-# _repo_slug — the repo label that namespaces sessions (`<repo>/...`). Slugified so it's safe in
-# a tmux session name (tmux forbids `.`/`:`, which a repo dir like `my.tool` could carry).
-# Overridable via HGT_REPO_NAME (the hermetic suite usually sets it). Defaults off _repo_root,
-# not --show-toplevel: from inside a worktree the toplevel is `<n>-<slug>`, not the repo (#65).
-_repo_slug() {
-  local name; name="${HGT_REPO_NAME:-$(basename "$(_repo_root)")}"
-  slugify "$name"
-}
-
-# _session_name N WT — the human-readable session id `<repo>/<n>-<slug>` (issue #36), derived
-# wholly from N and the worktree dir. It's the join key across tmux create/attach/resume, tmux
-# kill, and `claude --resume`. The slug is a cosmetic suffix recovered from the worktree dir (the
-# durable, N-keyed artifact), so create and teardown reconstruct the *same* name from N alone —
-# no title lookup, and no create-vs-kill drift by construction. Prints to stdout.
-_session_name() {
-  printf '%s/%s-%s' "$(_repo_slug)" "$1" "$(_slug_of "$1" "$2")"
-}
-
-# _carry_worktree_includes WT — copy the files named in ./.worktreeinclude (e.g. .env) into
-# the new worktree. `git worktree add` doesn't carry git-ignored files, so this is what makes
-# that scaffolded file mean something. Patterns are globbed against the repo's working tree.
-_carry_worktree_includes() {
-  local wt="$1" pattern f
-  [ -f .worktreeinclude ] || return 0
-  while IFS= read -r pattern; do
-    case "$pattern" in '' | '#'*) continue ;; esac
-    for f in $pattern; do
-      [ -e "$f" ] || continue
-      mkdir -p "$wt/$(dirname "$f")"
-      cp -a "$f" "$wt/$f"
-      info "  carry  $f -> worktree"
-    done
-  done <.worktreeinclude
-}
+# Worktree/session naming, sandbox prep, and the paired-pane tmux launcher live in
+# lib/session.sh (shared with `hgt respond`, #84) — sourced by the hgt entrypoint.
 
 # _seed_work_state N TITLE URL BODY WT BRANCH — write the durable plan file (§4) into the
 # worktree and, only when it's freshly created, commit it as the first recovery checkpoint on
@@ -134,54 +59,9 @@ EOF
   fi
 }
 
-# _tmux_attach NAME — join session NAME without nesting. Inside tmux ($TMUX set) you can't
-# attach (tmux refuses), so switch the current client instead; otherwise attach fresh.
-# Attaching is best-effort: the detached session is the durable artifact, so a headless/non-tty
-# caller (where attach fails "open terminal failed") must not abort hgt under set -e when the
-# session is alive and reattachable — warn how to reach it and move on.
-_tmux_attach() {
-  local name="$1"
-  if [ -n "${TMUX:-}" ]; then
-    run tmux switch-client -t "$name" || warn "couldn't switch to tmux session $name (attach manually: tmux attach -t $name)"
-  else
-    run tmux attach-session -t "$name" || warn "couldn't attach tmux session $name (attach manually: tmux attach -t $name)"
-  fi
-}
-
-# _shq STRING — single-quote STRING so the pane's shell (/bin/sh is dash) re-reads it as one
-# literal word. tmux send-keys types the command into that shell, which then parses it: wrap in
-# '...' and rewrite every embedded ' as '\'' (close-quote, backslash-escaped literal quote,
-# reopen-quote). This is the only quoting dash honors — it has no bash $'...' — so ', $, `, and
-# newlines all survive verbatim (issue #25). Prints to stdout, no trailing newline.
-_shq() {
-  local s=${1//\'/\'\\\'\'}
-  printf "'%s'" "$s"
-}
-
-# _prepare_sandbox WT — build the confinement prefix for a claude launch in worktree WT (#67).
-# Enabled (default): preflight bwrap and fail closed, then set HGT_SANDBOX_ARGV (a real argv, for
-# the inline path) and _SANDBOX_SQ (the same _shq-quoted with a trailing space, for the send-keys
-# string). Disabled (--no-sandbox / HGT_NO_SANDBOX=1): warn loudly and leave both empty, so the
-# unconfined launch matches the pre-#67 behavior byte-for-byte.
-_prepare_sandbox() {
-  local wt="$1" a
-  HGT_SANDBOX_ARGV=()
-  _SANDBOX_SQ=""
-  if ! sandbox_enabled; then
-    warn "sandbox: disabled — launching the agent UNCONFINED (full FS + credential access, #67)"
-    return 0
-  fi
-  sandbox_preflight
-  sandbox_argv "$wt"
-  for a in "${HGT_SANDBOX_ARGV[@]}"; do _SANDBOX_SQ+="$(_shq "$a") "; done
-}
-
-# launch_session N WT [TMUX] — the launcher seam (spec §4/§5). Default (TMUX=1): run the named
-# claude session inside a *detached* tmux session `<repo>/<n>-<slug>`, then attach/switch to it. The
-# detached session outlives your terminal, so crash-recovery becomes "reattach if it's alive,
-# else recreate" instead of "relaunch from scratch" (see ADR 0003). Resume reuses a live session
-# rather than spawning a second. TMUX=0 (--no-tmux) keeps the Slice 2 inline launch. The tmux
-# session name matches the claude session name so `claude --resume` stays deterministic too.
+# launch_session N WT [TMUX] — the `hgt work` kickoff prompt, then the shared paired-pane
+# launcher (lib/session.sh::launch_paired_session, #84) does the rest — sandbox prep, tmux
+# layout, resume/attach. TMUX=0 (--no-tmux) launches inline instead.
 launch_session() {
   local n="$1" wt="$2" use_tmux="${3:-1}"
   local name; name=$(_session_name "$n" "$wt")
@@ -189,56 +69,7 @@ launch_session() {
   # drive quoting edge-cases (', $, `, newline) through the launcher (issue #25). Local path only,
   # so a self-set env var crosses no trust boundary.
   local prompt="${HGT_WORK_PROMPT:-Read .hgt/work/${n}.md and CLAUDE.md, then start on issue #${n}. Commit early and often — every commit is a recovery checkpoint. Open a PR for review; do not merge.}"
-
-  # Sandbox seam (#67, ADR 0005): confine claude to the worktree. _prepare_sandbox preflights
-  # (fail closed) and populates HGT_SANDBOX_ARGV (the bwrap prefix) + _SANDBOX_SQ (the same,
-  # _shq-quoted, for the send-keys string the pane shell re-parses). Both are empty when
-  # --no-sandbox / HGT_NO_SANDBOX=1 opts out, so the unconfined launch is byte-identical to before.
-  # Called only on the paths that actually spawn claude — a resume reattaches an already-jailed
-  # session, so it neither preflights nor rebuilds the prefix.
-
-  if [ "$use_tmux" -eq 0 ]; then
-    _prepare_sandbox "$wt"
-    # Expanding an empty HGT_SANDBOX_ARGV (--no-sandbox) under set -u is safe on bash 4.4+ (the
-    # target; Kubuntu ships 5.x) — it'd trip on 3.2/4.3 if hgt ever claims broader portability.
-    (cd "$wt" && run "${HGT_SANDBOX_ARGV[@]}" claude -n "$name" "$prompt")
-    return
-  fi
-
-  if tmux has-session -t "$name" 2>/dev/null; then
-    # Resume reattaches the live session *untouched* — no re-split. Re-running split-window here
-    # would stack a third pane onto an already-2-pane layout on every resume (#24); the durable
-    # session already carries whatever layout the last launch established.
-    info "resume: tmux session $name is live"
-  else
-    # Fresh launch: two panes — claude left, a shell right, cwd = the worktree (#24). new-session
-    # -d starts the window as a *plain shell*; send-keys types the claude command into it; then
-    # split-window -h adds a second shell beside it (no command = your default shell) and
-    # select-pane -L returns focus to claude so you land on the agent, not the shell.
-    #
-    # Why send-keys instead of `new-session ... "<cmd>"` (#47): running claude as the pane's PID 1
-    # couples its lifecycle to the pane's — when claude exits for *any* reason (e.g. a bad inherited
-    # env) the pane closes, and being the last pane, the whole session evaporates. The next
-    # split-window then fails "can't find pane", masking the real cause: a total, silent failure
-    # contradicting ADR 0003's "the detached session is the durable artifact." Launching claude
-    # *into* a live shell decouples them: if claude dies you land in a shell in the worktree with
-    # its stderr on screen — session intact, `claude --resume` available, failure visible.
-    #
-    # send-keys types this string into the pane's shell, which parses it — so every interpolated
-    # value must be shell-safe, not just this launcher's own string (issue #25). _shq single-quotes
-    # each so ', $, `, and even a newline reach claude as one literal arg instead of breaking the
-    # command apart. A newline is safe *because* it's quoted: send-keys injects it as an Enter, but
-    # inside the open '...' the shell treats that as line continuation (the `quote>` prompt), not an
-    # early submit — the final Enter (a separate send-keys arg) runs the whole command once the
-    # closing quote lands. An *unquoted* newline would split it; quoting is exactly what prevents
-    # that. (Verified against real tmux, not just an sh -c parse — see PR #49.)
-    _prepare_sandbox "$wt"
-    run tmux new-session -d -s "$name" -c "$wt"
-    run tmux send-keys -t "$name" "${_SANDBOX_SQ}claude -n $(_shq "$name") $(_shq "$prompt")" Enter
-    run tmux split-window -h -t "$name" -c "$wt"
-    run tmux select-pane -t "$name" -L
-  fi
-  _tmux_attach "$name"
+  launch_paired_session "$name" "$wt" "$prompt" "$use_tmux"
 }
 
 cmd_work_rm() {
@@ -259,40 +90,7 @@ cmd_work_rm() {
   wtpath=$(_find_worktree "$n")
   [ -n "$wtpath" ] || die "hgt work rm: no worktree for issue $n under $(_worktree_base)"
 
-  # Refuse to nuke work that isn't safely recorded elsewhere. A dirty tree (uncommitted) or
-  # commits not on any remote (unpushed) would be lost with the worktree — make the human opt
-  # in via --force. The PR may be open, so we leave the branch regardless.
-  if [ "$force" -ne 1 ]; then
-    # Fail closed: no `|| true`. If git errors here (corrupt worktree, bad path) let set -e
-    # abort, rather than read an empty result as "clean" and delete the worktree. Note: porcelain
-    # also lists carried .worktreeinclude files when they aren't gitignored, so those read as
-    # dirty — expected, since such files are typically .env-class.
-    local dirty unpushed
-    dirty=$(git -C "$wtpath" status --porcelain)
-    # HEAD, not --branches: worktrees share one .git, so --branches would also count unpushed
-    # commits on unrelated branches and refuse to remove a fully-pushed issue-<n> worktree.
-    unpushed=$(git -C "$wtpath" log HEAD --not --remotes --oneline)
-    if [ -n "$dirty" ] || [ -n "$unpushed" ]; then
-      die "hgt work rm: issue $n has uncommitted or unpushed work — rerun with --force to discard"
-    fi
-  fi
-
-  # Kill the tmux session before the worktree it's rooted in disappears (Slice 2b): ordering
-  # kill-session ahead of `git worktree remove` keeps a live detached claude from ending up
-  # with a deleted cwd, and stops a failing remove from stranding the session. Guard on
-  # has-session so an inline (--no-tmux) or already-dead run doesn't error.
-  local name; name=$(_session_name "$n" "$wtpath")
-  if tmux has-session -t "$name" 2>/dev/null; then
-    run tmux kill-session -t "$name"
-  fi
-
-  if [ "$force" -eq 1 ]; then
-    run git worktree remove --force "$wtpath"
-  else
-    run git worktree remove "$wtpath"
-  fi
-
-  info "removed worktree for issue $n (branch left intact)"
+  session_teardown work issue "$n" "$n" "$wtpath" "$force"
 }
 
 cmd_work() {

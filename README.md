@@ -99,6 +99,7 @@ early and often so every commit is a recovery checkpoint.
 hgt init                 # idempotent scaffold of hgt into a new/existing repo
 hgt issue ...            # manage the issue queue (create, list, show, ready)
 hgt work <n>             # local execution: worktree + Claude session for issue <n>
+hgt respond <pr>         # local review-response session: sandboxed agent + privileged shell
 ```
 
 - **`hgt init`** drops a lean `CLAUDE.md` and gated, least-privilege workflow file(s),
@@ -115,6 +116,11 @@ hgt work <n>             # local execution: worktree + Claude session for issue 
   auth, sibling repos) gone — while tmux and the human's shell pane stay on the host so
   `tmux attach` is untouched. On by default and fail-closed; `--no-sandbox` opts out. On
   Ubuntu 24.04+ install the one-time AppArmor profile first (the preflight prints how).
+- **`hgt respond <pr>`** (issue #84, [ADR 0006](docs/adr/0006-issue-84-respond-naming.md)) is
+  the attended review-response session: a worktree on the PR's own branch, the same sandboxed
+  agent pane + tmux layout as `hgt work` (shared in `lib/session.sh`), and a privileged,
+  unconfined shell pane beside it for you to intervene in. It doesn't merge — the human stays
+  the gate.
 
 ## Tests & CI
 

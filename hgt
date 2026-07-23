@@ -19,6 +19,8 @@ source "$HGT_ROOT/lib/common.sh"
 source "$HGT_ROOT/lib/gh.sh"
 # shellcheck source=lib/sandbox.sh
 source "$HGT_ROOT/lib/sandbox.sh"
+# shellcheck source=lib/session.sh
+source "$HGT_ROOT/lib/session.sh"
 
 HGT_VERSION="0.0.1-slice1"
 
@@ -32,6 +34,7 @@ commands:
   init     scaffold hgt into the current repo (idempotent)
   issue    manage the issue queue           (not implemented yet)
   work     local worktree + Claude session for issue <n>
+  respond  local review-response session (sandboxed agent + privileged shell) for PR <n>
 
 options:
   -h, --help     show this help
@@ -47,10 +50,11 @@ main() {
   esac
   shift
   case "$cmd" in
-    init)  source "$HGT_ROOT/cmds/init.sh";  cmd_init  "$@" ;;
-    issue) source "$HGT_ROOT/cmds/issue.sh"; cmd_issue "$@" ;;
-    work)  source "$HGT_ROOT/cmds/work.sh";  cmd_work  "$@" ;;
-    *)     die "unknown command: $cmd (try 'hgt --help')" ;;
+    init)    source "$HGT_ROOT/cmds/init.sh";    cmd_init    "$@" ;;
+    issue)   source "$HGT_ROOT/cmds/issue.sh";   cmd_issue   "$@" ;;
+    work)    source "$HGT_ROOT/cmds/work.sh";    cmd_work    "$@" ;;
+    respond) source "$HGT_ROOT/cmds/respond.sh"; cmd_respond "$@" ;;
+    *)       die "unknown command: $cmd (try 'hgt --help')" ;;
   esac
 }
 

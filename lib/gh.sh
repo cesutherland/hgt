@@ -43,6 +43,16 @@ tracker_issue_view() {
     --jq '"number=" + (.number|tostring), "url=" + .url, "title=" + .title, "---body---", .body'
 }
 
+# forge_pr_view N — resolve a PR to a stable, parseable record (issue #84's review-response
+# session), same shape as tracker_issue_view: single-line `key=` fields, no body (the agent pane
+# reads the live review comments/diff itself, under its own scoped identity — this call only
+# needs enough to place a worktree). `fork=` flags a cross-repository PR, whose branch lives on
+# a remote we don't have write access to; callers decline those.
+forge_pr_view() {
+  run gh pr view "$1" --json number,title,url,headRefName,isCrossRepository \
+    --jq '"number=" + (.number|tostring), "url=" + .url, "title=" + .title, "branch=" + .headRefName, "fork=" + (.isCrossRepository|tostring)'
+}
+
 # forge_current_user — the authenticated GitHub login, used to namespace feature branches as
 # `<user>/<issue>-<slug>` (issue #36). A forge concern (who authors the branch on the code
 # host), not a tracker one, so it lives on the forge_ axis. One `gh` call; prints to stdout.
