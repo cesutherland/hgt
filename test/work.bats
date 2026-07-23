@@ -249,3 +249,71 @@ Wire it up.'
   [ "$status" -ne 0 ]
   [[ "$output" == *"no worktree"* ]]
 }
+
+# --- sandbox (#67, ADR 0005) -------------------------------------------------------------------
+# The jail is part of hgt's contract now: which bwrap flags it wraps claude in, and that it fails
+# closed rather than launch an unconfined agent. The bwrap shim execs the wrapped command, so the
+# claude-level assertions above already prove the jail is transparent; these pin the jail itself.
+
+@test "sandbox: the jail binds the worktree + shared .git rw, tmpfs's \$HOME, and clears the env" {
+  work_env  # sandbox on by default
+  run "$HGT_BIN" work 5 --no-tmux  # inline path -> bwrap prefix lands on its own log line
+  [ "$status" -eq 0 ]
+  local bw; bw=$(grep '^bwrap ' "$SHIM_LOG")
+  # worktree read-write, and the repo's shared .git (resolved via git rev-parse) read-write
+  [[ "$bw" == *"--bind $TMP/wt/5-add-widget $TMP/wt/5-add-widget"* ]]
+  [[ "$bw" == *"--bind $TMP/wt/5-add-widget/.git $TMP/wt/5-add-widget/.git"* ]]
+  # $HOME is a tmpfs (the boundary) and the env starts empty
+  [[ "$bw" == *"--tmpfs $HOME"* ]]
+  [[ "$bw" == *"--clearenv"* ]]
+  # gpg-signing forced off inside — the agent has no ~/.gnupg, can't sign as the human
+  [[ "$bw" == *"--setenv GIT_CONFIG_KEY_0 commit.gpgsign"* ]]
+  [[ "$bw" == *"GIT_CONFIG_VALUE_0 false"* ]]
+}
+
+@test "sandbox: the jail never binds ~/.ssh or the admin gh auth" {
+  work_env
+  run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  local bw; bw=$(grep '^bwrap ' "$SHIM_LOG")
+  # the two secrets the acceptance criteria name: never mounted, so unreachable by construction
+  [[ "$bw" != *".ssh"* ]]
+  [[ "$bw" != *".config/gh"* ]]
+}
+
+@test "sandbox: HGT_SANDBOX_RO_BIND extends the read-only binds (dogfooding seam)" {
+  work_env
+  HGT_SANDBOX_RO_BIND=/opt/toolchain run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  grep '^bwrap ' "$SHIM_LOG" | grep -q -- '--ro-bind-try /opt/toolchain /opt/toolchain'
+}
+
+@test "sandbox: fails closed with the AppArmor remediation when userns is blocked" {
+  work_env
+  # SHIM_BWRAP_USERNS=1 simulates the Ubuntu-restricted box: the preflight probe can't make a userns
+  run env SHIM_BWRAP_USERNS=1 "$HGT_BIN" work 5
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"user namespace"* ]]
+  [[ "$output" == *"apparmor_parser -r"* ]]  # the exact fix, printed
+  # fail closed: no claude, no tmux session spawned
+  ! grep -q '^claude ' "$SHIM_LOG"
+  ! grep -q '^tmux new-session' "$SHIM_LOG"
+}
+
+@test "sandbox: --no-sandbox launches claude unconfined, with a warning and no bwrap" {
+  work_env
+  run "$HGT_BIN" work 5 --no-tmux --no-sandbox
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"UNCONFINED"* ]]        # loud about the trade
+  grep -q '^claude -n hgt/5-add-widget ' "$SHIM_LOG"  # launched directly, as pre-#67
+  ! grep -q '^bwrap ' "$SHIM_LOG"          # no jail
+}
+
+@test "sandbox: a resumed live tmux session is not re-jailed (already confined at launch)" {
+  work_env
+  # live session -> resume path; it must not preflight/rebuild the jail (no bwrap, no send-keys)
+  run env SHIM_TMUX_HAS_SESSION=0 "$HGT_BIN" work 5
+  [ "$status" -eq 0 ]
+  ! grep -q '^bwrap ' "$SHIM_LOG"
+  ! grep -q '^tmux send-keys' "$SHIM_LOG"
+}
