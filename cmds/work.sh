@@ -107,11 +107,11 @@ _seed_work_state() {
 
 $body
 
-## Checklist
+## Getting started
 
-- [ ] Read this file and CLAUDE.md before starting.
-- [ ] Implement the slice; commit early and often — every commit is a recovery checkpoint.
-- [ ] Open a PR for human review. Do not merge (green is necessary, not sufficient).
+1. Read this file and CLAUDE.md before starting.
+2. Implement the slice; commit early and often — every commit is a recovery checkpoint.
+3. Open a PR for human review. Do not merge (green is necessary, not sufficient).
 
 ## Recovery
 
