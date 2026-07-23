@@ -288,7 +288,8 @@ Wire it up.'
   # the guardrail: env crosses the jail only via the curated allowlist. A shell-exported secret
   # must NOT surface as --setenv — this is the test that catches "fixing friction" by widening
   # _SANDBOX_ENV_PASS instead of using the HGT_SANDBOX_SETENV seam.
-  GH_TOKEN=sekret AWS_SECRET_ACCESS_KEY=sekret HGT_SANDBOX_SETENV=NVM_DIR NVM_DIR=/opt/nvm \
+  TERM=xterm GH_TOKEN=sekret AWS_SECRET_ACCESS_KEY=sekret \
+    HGT_SANDBOX_SETENV=NVM_DIR NVM_DIR=/opt/nvm \
     run "$HGT_BIN" work 5 --no-tmux
   [ "$status" -eq 0 ]
   local bw; bw=$(grep '^bwrap ' "$SHIM_LOG")
