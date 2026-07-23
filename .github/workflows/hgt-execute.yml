@@ -170,11 +170,21 @@ jobs:
             exit 0
           fi
 
+          # Only a *mutating* op on a workflow path implies the push-block case. Match on
+          # tool identity (Edit/Write/MultiEdit file_path, or a Bash write/push command) —
+          # NOT a bare file_path, which also matches a Read done merely for context and would
+          # pin an unrelated failure on the wrong cause. Normalize both shapes: tool_use
+          # blocks (.name/.input) and permission_denials entries (.tool_name/.tool_input).
           exec_file="${{ steps.execute.outputs.execution_file }}"
           if [ -n "${exec_file:-}" ] && [ -f "$exec_file" ]; then
             wf=$(jq -s '[ .. | objects
-              | (.tool_input?.file_path // "") + " " + (.tool_input?.command // "")
-              | select(test("\\.github/workflows/")) ] | length' "$exec_file" 2>/dev/null || echo 0)
+              | { n: (.name // .tool_name // ""),
+                  fp: (.input.file_path // .tool_input.file_path // ""),
+                  cmd: (.input.command // .tool_input.command // "") }
+              | select(
+                  ((.n | test("^(Edit|MultiEdit|Write)$")) and (.fp | test("\\.github/workflows/")))
+                  or ((.n == "Bash") and (.cmd | test("\\.github/workflows/")) and (.cmd | test("git push|>|>>|tee |sed -i")))
+                ) ] | length' "$exec_file" 2>/dev/null || echo 0)
             if [ "${wf:-0}" -gt 0 ]; then
               echo "::error::Issue #$issue needs to change a file under .github/workflows/, which the executor can edit but cannot push (workflows: write withheld by design, §3). Route it to a human/local session — do not grant the executor workflow write."
               exit 1
