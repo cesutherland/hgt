@@ -83,13 +83,20 @@ The preflight prints these commands verbatim when the jail can't start.
   box until the AppArmor profile lands (root, password-gated), so this slice is validated by
   construction + shim conformance tests (the argv hgt emits), not by running claude jailed.
   Carl validates AC #1/#2 live the first time he installs the profile and runs `hgt work`.
-- **Network egress is not filtered.** `--share-net` gives the agent the full host network
-  (it needs the Anthropic API + the git remote); bwrap can't do egress allowlisting without a
-  proxy or a netns+firewall. Deferred — a follow-up (proxy or nftables in a netns).
-- **`~/.claude` / `~/.claude.json` are exposed rw.** The Anthropic credential is unavoidable
-  (it's the whole point), but this also exposes Carl's global MCP config and cross-project
-  history to an injected agent. Follow-up: a dedicated minimal sandbox config home
-  (`CLAUDE_CONFIG_DIR`) holding only the credential.
+- **`~/.claude` rw is an escape vector, not just a confidentiality leak (#73, next slice).**
+  Claude Code executes hooks/settings from user-level `~/.claude/settings.json`. Binding that
+  dir **writable** lets a prompt-injected agent write a malicious hook that then runs
+  **unsandboxed on the host** the next time Carl launches Claude — a write-back that round-trips
+  straight out of the jail with full privileges. (The confidentiality angle — global MCP config,
+  cross-project history — is the lesser half.) Fix: a dedicated minimal config home
+  (`CLAUDE_CONFIG_DIR`) that carries only the credential and no host settings/hooks. Bumped from
+  "someday" to the next slice.
+- **A readable credential + unfiltered egress exfiltrates (#74).** `~/.claude.json` is bound
+  readable and `--share-net` gives the full host network (the agent needs the Anthropic API + the
+  git remote). Individually tolerable; **together** an injected agent can steal the Anthropic
+  token — and the whole worktree — to any host. So AC #2 holds *structurally* (no admin `gh`), but
+  "reach **only** a scoped credential/network" does not until egress is constrained (proxy or
+  netns+nftables). Prioritized alongside #73 — the two are the escape+exfil pair.
 - **Scoped push token not provisioned.** The `HGT_SANDBOX_GITHUB_TOKEN` seam exists but no
   machine-user PAT is wired yet, so pushes from inside the jail fail closed until one is. That
   provisioning is its own slice.
