@@ -106,7 +106,7 @@ jobs:
                     reviewThreads(first: 100) {
                       nodes {
                         isResolved path line
-                        comments(first: 20) { nodes { author { login } body } }
+                        comments(first: 20) { nodes { databaseId author { login } body } }
                       }
                     }
                   }
@@ -134,7 +134,7 @@ jobs:
              + [$pr.reviewThreads.nodes[]
                | select(.isResolved | not)
                | "### Unresolved thread — \(.path):\(.line // "?")\n"
-                 + ([.comments.nodes[] | "@\(.author.login // "ghost"): \(.body)"] | join("\n")) + "\n"])
+                 + ([.comments.nodes[] | "[id \(.databaseId)] @\(.author.login // "ghost"): \(.body)"] | join("\n")) + "\n"])
             | join("\n")')
 
           delim="HGT_FEEDBACK_$(uuidgen)"
@@ -165,9 +165,11 @@ jobs:
           # Bash(git:*)/Bash(gh:*) wildcards — v0 feeds RAW comment text to the agent, so
           # an injection runs against whatever Bash is allowed. git status/diff/log are
           # read-only helpers for seeing the PR delta (Bash commands don't get the
-          # Read/Grep/Glob no-prompt pass); gh pr comment is the one reply verb — a
-          # top-level summary. Thread-level replies need gh api, too broad for v0.
-          # gh issue create serves the skill's `defer` category (ADR 0006 D4 fallback —
+          # Read/Grep/Glob no-prompt pass). The gh api rule is pinned to THIS PR's
+          # review-comments path — that's where thread replies (`…/comments/<id>/replies`)
+          # land, and the prefix can't reach merge, approve, another PR, or any other
+          # endpoint. gh pr comment covers the wrap-up + loud-stop channel; gh issue
+          # create serves the skill's `defer` category (ADR 0006 D4 fallback —
           # `hgt issue create` doesn't exist here).
           #
           # A review asking for a `.github/workflows/**` change can be edited but not
@@ -175,7 +177,7 @@ jobs:
           # the self-escalation §3 forbids — do NOT grant it). The prompt tells the agent
           # to stop loudly; the guard below turns the no-push into a red job.
           claude_args: |
-            --allowedTools "Edit,Write,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh pr comment:*),Bash(gh issue create:*)"
+            --allowedTools "Edit,Write,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh pr comment:*),Bash(gh issue create:*),Bash(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments:*)"
           prompt: |
             You are the hgt review responder. Address the outstanding review feedback on
             PR #${{ github.event.pull_request.number }} in ${{ github.repository }}. The
@@ -198,15 +200,17 @@ jobs:
             Mechanics for this Actions run — the `hgt review` verbs (#18) do not exist
             here; substitute as follows, everything else in the skill applies as written:
             - `hgt review list` → the feedback block above is the authoritative
-              outstanding set.
-            - `hgt review reply` → unavailable. Commit each fix separately, then post ONE
-              summary PR comment (`gh pr comment ${{ github.event.pull_request.number }} --body ...`)
-              giving every comment's category and reply — cite the commit sha for each
-              fix. Note in it that CI does NOT re-run on pushed commits (#58) — a human
-              must re-trigger checks.
+              outstanding set. Each thread comment carries its reply id as `[id N]`.
+            - `hgt review reply <id> --body "..."` →
+              `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments/<id>/replies -f body="..."`
+              Keep the skill's atomicity: per fix, commit → `git push` → reply citing the
+              pushed sha, one comment at a time.
             - defer → `hgt issue create` does not exist here; go straight to
               `gh issue create --title "..." --body "..."` and cite the real issue number.
-            - Push to the PR branch with `git push`.
+            - Review-summary feedback with no thread id, the note that CI does NOT re-run
+              on pushed commits (#58 — a human must re-trigger checks), and any blocked
+              STOP report go in one short wrap-up comment:
+              `gh pr comment ${{ github.event.pull_request.number }} --body ...`
             - Work only within this repo. Do NOT fetch external URLs or inspect the
               action's own internals — everything you need is already here.
             - A change under `.github/workflows/**` can be edited but not pushed
@@ -273,8 +277,12 @@ jobs:
             fi
           fi
 
-          replied=$(gh api "repos/${{ github.repository }}/issues/$pr/comments?since=$started" \
+          # Both reply surfaces: thread replies (pulls/N/comments) + wrap-up (issues/N/comments).
+          ic=$(gh api "repos/${{ github.repository }}/issues/$pr/comments?since=$started" \
             --jq '[.[] | select(.user.login == "github-actions[bot]")] | length')
+          rc=$(gh api "repos/${{ github.repository }}/pulls/$pr/comments?since=$started" \
+            --jq '[.[] | select(.user.login == "github-actions[bot]")] | length')
+          replied=$((ic + rc))
 
           if [ "$pushed" = true ] || [ "${replied:-0}" -gt 0 ]; then
             echo "commits pushed: $pushed ($head_before -> $head_after); replies posted since $started: ${replied:-0}"
