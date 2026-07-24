@@ -399,3 +399,60 @@ Build the widget.'
   ! grep -q '^bwrap ' "$SHIM_LOG"
   ! grep -q '^tmux send-keys' "$SHIM_LOG"
 }
+
+# --- credentialed publish (#81) ----------------------------------------------------------------
+# The publish boundary: by default the jail holds NO push credential — commits dead-end locally
+# (the #67 fail-closed default). HGT_SANDBOX_GITHUB_TOKEN opts in a scoped push/PR path, the SAME
+# seam attended + unattended (#17). The token must never surface in the argv/log/pane — it rides a
+# bound, mode-600 gh config dir, so only its *path* is ever visible.
+
+@test "publish: no token -> the jail holds no push credential (fail-closed default, #81)" {
+  work_env
+  run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  local bw; bw=$(grep '^bwrap ' "$SHIM_LOG")
+  [[ "$bw" != *"GH_CONFIG_DIR"* ]]                 # no gh credential dir
+  [[ "$bw" != *"insteadOf"* ]]                     # no https rewrite / push path
+  [[ "$bw" == *"--setenv GIT_CONFIG_COUNT 1"* ]]   # only the gpgsign-off entry
+}
+
+@test "publish: a scoped token wires push+PR into the jail without leaking the token (#81)" {
+  work_env
+  export HGT_SANDBOX_CRED_DIR="$TMP/cred"
+  run env HGT_SANDBOX_GITHUB_TOKEN=ghp_SEKRET "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  local bw; bw=$(grep '^bwrap ' "$SHIM_LOG")
+  # gh bound read-only + its config dir bound + GH_CONFIG_DIR set so `gh pr create` authenticates
+  [[ "$bw" == *"--ro-bind $(command -v gh) $(command -v gh)"* ]]
+  [[ "$bw" == *"--setenv GH_CONFIG_DIR $TMP/cred/5-add-widget"* ]]
+  # git rewrites git@ -> https and delegates auth to gh, so `git push` uses ONLY this token
+  [[ "$bw" == *"url.https://github.com/.insteadOf"* ]]
+  [[ "$bw" == *"credential.https://github.com.helper"* ]]
+  [[ "$bw" == *"!gh auth git-credential"* ]]
+  [[ "$bw" == *"--setenv GIT_CONFIG_COUNT 3"* ]]
+  # THE hygiene property: the token value appears NOWHERE in the argv hgt builds/echoes...
+  ! grep -q 'ghp_SEKRET' "$SHIM_LOG"
+  # ...it lives only in the mode-600 hosts.yml gh reads
+  grep -q 'oauth_token: ghp_SEKRET' "$TMP/cred/5-add-widget/hosts.yml"
+  [ "$(stat -c %a "$TMP/cred/5-add-widget/hosts.yml")" = 600 ]
+}
+
+@test "publish: the token never lands in the tmux send-keys string typed into the pane (#81)" {
+  work_env  # default tmux path -> send-keys types the launch command into the visible pane
+  export HGT_SANDBOX_CRED_DIR="$TMP/cred"
+  run env HGT_SANDBOX_GITHUB_TOKEN=ghp_SEKRET "$HGT_BIN" work 5
+  [ "$status" -eq 0 ]
+  grep -q '^tmux send-keys' "$SHIM_LOG"       # the launch really went through send-keys
+  ! grep -q 'ghp_SEKRET' "$SHIM_LOG"          # and the token wasn't in what got typed
+}
+
+@test "publish: work rm removes the scoped token dir so it can't outlive the worktree (#81)" {
+  work_env
+  export HGT_SANDBOX_CRED_DIR="$TMP/cred"
+  env HGT_SANDBOX_GITHUB_TOKEN=ghp_SEKRET "$HGT_BIN" work 5 --no-tmux >/dev/null 2>&1
+  [ -d "$TMP/cred/5-add-widget" ]
+  : >"$SHIM_LOG"
+  run "$HGT_BIN" work rm 5
+  [ "$status" -eq 0 ]
+  [ ! -e "$TMP/cred/5-add-widget" ]
+}

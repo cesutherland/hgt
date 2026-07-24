@@ -292,6 +292,9 @@ cmd_work_rm() {
     run git worktree remove "$wtpath"
   fi
 
+  # Don't let a scoped push token (#81) outlive its worktree.
+  sandbox_credential_cleanup "$wtpath"
+
   info "removed worktree for issue $n (branch left intact)"
 }
 

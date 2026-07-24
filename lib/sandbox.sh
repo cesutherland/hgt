@@ -8,6 +8,12 @@
 # This is a shared seam: launch_session prefixes it onto claude on both the inline and tmux
 # paths, and the future local-listener executor reuses it — identical confinement, attended or
 # not (#17). Everything here is a pure argv builder + preflight; no side effects at source time.
+#
+# The publish boundary (#81): by default the jail holds NO push credential — commits land locally
+# and stop there. Set HGT_SANDBOX_GITHUB_TOKEN to a scoped machine-user PAT and the jail gains a
+# credentialed push/PR path (git@ -> https, gh as the git credential helper), the SAME seam for the
+# attended and unattended (#17) paths. The token rides a bound gh config dir, never an env var or
+# argv (see _sandbox_credential). Fail-closed stays the default: no token, no push power.
 
 # Runtime deps under $HOME re-bound read-only over the tmpfs. Machine-specific (node via nvm,
 # the claude launcher under ~/.local), so extend via HGT_SANDBOX_RO_BIND (space-separated,
@@ -105,15 +111,78 @@ sandbox_argv() {
     --chdir "$wt"
   )
 
-  # Env: pass through the curated allowlist (skip unset), then force gpg-signing off — the jail
-  # has no ~/.gnupg, so the agent can't sign as Carl and its commits are unsigned by design.
+  # Env: pass through the curated allowlist (skip unset).
   local var
   for var in $_SANDBOX_ENV_PASS ${HGT_SANDBOX_SETENV:-}; do
     [ -n "${!var:-}" ] && HGT_SANDBOX_ARGV+=(--setenv "$var" "${!var}")
   done
-  HGT_SANDBOX_ARGV+=(
-    --setenv GIT_CONFIG_COUNT 1
-    --setenv GIT_CONFIG_KEY_0 commit.gpgsign
-    --setenv GIT_CONFIG_VALUE_0 false
+
+  # git config injected via the numbered GIT_CONFIG_* env (no ~/.gitconfig write needed). Always
+  # force gpg-signing off — the jail has no ~/.gnupg, so the agent can't sign as Carl and its
+  # commits are unsigned by design. With a scoped push token (#81) also rewrite git@ -> https and
+  # point git's credential helper at gh, so the jailed agent can push with ONLY that token — never
+  # Carl's ~/.ssh or admin gh. The token itself never lands here (see _sandbox_credential): it
+  # rides a bound gh config dir, so it stays out of the argv, the `run` echo, and the tmux pane.
+  local -a gitcfg=(commit.gpgsign false)
+  if [ -n "${HGT_SANDBOX_GITHUB_TOKEN:-}" ]; then
+    _sandbox_credential "$wt"
+    HGT_SANDBOX_ARGV+=(--setenv GH_CONFIG_DIR "$_SANDBOX_GH_CONFIG_DIR")
+    gitcfg+=(
+      "url.https://github.com/.insteadOf" "git@github.com:"
+      "credential.https://github.com.helper" "!gh auth git-credential"
+    )
+  fi
+  HGT_SANDBOX_ARGV+=(--setenv GIT_CONFIG_COUNT "$(( ${#gitcfg[@]} / 2 ))")
+  local i=0
+  while [ "$i" -lt "${#gitcfg[@]}" ]; do
+    HGT_SANDBOX_ARGV+=(
+      --setenv "GIT_CONFIG_KEY_$((i / 2))" "${gitcfg[i]}"
+      --setenv "GIT_CONFIG_VALUE_$((i / 2))" "${gitcfg[i + 1]}"
+    )
+    i=$((i + 2))
+  done
+}
+
+# _sandbox_credential WT — provision a jail-only GitHub credential from HGT_SANDBOX_GITHUB_TOKEN
+# (#81), the same seam for the attended and unattended paths (#17). The token must NOT ride an env
+# var: send-keys would type it straight into the visible tmux pane and `run` would echo it — a live
+# credential in scrollback/logs. So it rides a mode-700 gh config dir bound read-write into the jail
+# at the same path; only the *path* appears in the argv. gh reads it (GH_CONFIG_DIR) for `pr create`
+# and serves it to git as a credential helper for push. Sets _SANDBOX_GH_CONFIG_DIR (the bound path)
+# and appends the gh binary + config-dir binds to HGT_SANDBOX_ARGV. Writes a file — a launch-time
+# side effect, unlike the rest of this pure argv builder.
+#
+# NOTE (trust): a readable token + today's --share-net egress is exactly the exfil surface ADR 0005
+# flags as gated on #74. This seam is safe to use only while egress is trusted/constrained.
+_sandbox_credential() {
+  local wt="$1" gh
+  gh=$(command -v gh) \
+    || die "sandbox: HGT_SANDBOX_GITHUB_TOKEN set but gh isn't on PATH — the jail needs it to push/PR with the token."
+  # Per-worktree config dir on the host, mode 700, holding only the scoped token. Under a runtime
+  # dir (not the worktree, which is bound rw and would surface it as untracked / risk a commit);
+  # HGT_SANDBOX_CRED_DIR overrides (the suite points it inside its tmpdir).
+  local base="${HGT_SANDBOX_CRED_DIR:-${XDG_RUNTIME_DIR:-/tmp}/hgt-cred}"
+  _SANDBOX_GH_CONFIG_DIR="$base/$(basename "$wt")"
+  # umask scoped to a subshell so it doesn't leak into the caller's later file writes.
+  ( umask 077
+    mkdir -p "$_SANDBOX_GH_CONFIG_DIR"
+    cat >"$_SANDBOX_GH_CONFIG_DIR/hosts.yml" <<EOF
+github.com:
+    oauth_token: $HGT_SANDBOX_GITHUB_TOKEN
+    git_protocol: https
+EOF
   )
+  HGT_SANDBOX_ARGV+=(
+    --ro-bind "$gh" "$gh"
+    --bind "$_SANDBOX_GH_CONFIG_DIR" "$_SANDBOX_GH_CONFIG_DIR"
+  )
+}
+
+# sandbox_credential_cleanup WT — remove the jail-only gh config dir (token) for worktree WT, if
+# any. Called by `hgt work rm` so a scoped token doesn't outlive its worktree. No-op when absent.
+sandbox_credential_cleanup() {
+  local base="${HGT_SANDBOX_CRED_DIR:-${XDG_RUNTIME_DIR:-/tmp}/hgt-cred}"
+  local dir="$base/$(basename "$1")"
+  [ -d "$dir" ] && run rm -rf "$dir"
+  return 0
 }
