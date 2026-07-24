@@ -140,11 +140,12 @@ jobs:
           delim="HGT_FEEDBACK_$(uuidgen)"
           { echo "feedback<<$delim"; echo "$feedback"; echo "$delim"; } >> "$GITHUB_OUTPUT"
 
-          # The shared behavior contract (#19 parity, #17) — from origin/main, NEVER the
-          # checked-out PR head, or a PR branch could rewrite the agent's own rules. No
-          # fallback: comment events only run this workflow from main, so by the time this
-          # fires the file is on main too; absence means someone deleted it — fail.
-          guidance=$(git show origin/main:prompts/review-response.md)
+          # The review-response skill (#19, ADR 0006 D5): one tuned document drives both
+          # surfaces — load it, don't copy it. From origin/main, NEVER the checked-out PR
+          # head, or a PR branch could rewrite the agent's own rules. No fallback: comment
+          # events only run this workflow from main, so by the time this fires the file is
+          # on main too; absence means someone deleted it — fail.
+          guidance=$(git show origin/main:templates/skills/review-response/SKILL.md)
           gdelim="HGT_GUIDANCE_$(uuidgen)"
           { echo "guidance<<$gdelim"; echo "$guidance"; echo "$gdelim"; } >> "$GITHUB_OUTPUT"
 
@@ -166,13 +167,15 @@ jobs:
           # read-only helpers for seeing the PR delta (Bash commands don't get the
           # Read/Grep/Glob no-prompt pass); gh pr comment is the one reply verb — a
           # top-level summary. Thread-level replies need gh api, too broad for v0.
+          # gh issue create serves the skill's `defer` category (ADR 0006 D4 fallback —
+          # `hgt issue create` doesn't exist here).
           #
           # A review asking for a `.github/workflows/**` change can be edited but not
           # pushed (GITHUB_TOKEN can't push workflow changes without `workflows: write`,
           # the self-escalation §3 forbids — do NOT grant it). The prompt tells the agent
           # to stop loudly; the guard below turns the no-push into a red job.
           claude_args: |
-            --allowedTools "Edit,Write,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh pr comment:*)"
+            --allowedTools "Edit,Write,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh pr comment:*),Bash(gh issue create:*)"
           prompt: |
             You are the hgt review responder. Address the outstanding review feedback on
             PR #${{ github.event.pull_request.number }} in ${{ github.repository }}. The
@@ -186,13 +189,24 @@ jobs:
             ${{ steps.collect.outputs.feedback }}
             ---
 
+            Your triage protocol is the review-response skill below. Run it in unattended
+            mode (`auto`): act and reply without waiting for approval.
+            ---
             ${{ steps.collect.outputs.guidance }}
+            ---
 
-            Mechanics for this Actions run:
-            - Push to the PR branch with `git push`.
-            - Your summary is ONE PR comment: `gh pr comment ${{ github.event.pull_request.number }} --body ...`.
-              Note in it that CI does NOT re-run on these pushed commits (#58) — a human
+            Mechanics for this Actions run — the `hgt review` verbs (#18) do not exist
+            here; substitute as follows, everything else in the skill applies as written:
+            - `hgt review list` → the feedback block above is the authoritative
+              outstanding set.
+            - `hgt review reply` → unavailable. Commit each fix separately, then post ONE
+              summary PR comment (`gh pr comment ${{ github.event.pull_request.number }} --body ...`)
+              giving every comment's category and reply — cite the commit sha for each
+              fix. Note in it that CI does NOT re-run on pushed commits (#58) — a human
               must re-trigger checks.
+            - defer → `hgt issue create` does not exist here; go straight to
+              `gh issue create --title "..." --body "..."` and cite the real issue number.
+            - Push to the PR branch with `git push`.
             - Work only within this repo. Do NOT fetch external URLs or inspect the
               action's own internals — everything you need is already here.
             - A change under `.github/workflows/**` can be edited but not pushed
