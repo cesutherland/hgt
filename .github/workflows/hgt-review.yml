@@ -4,15 +4,18 @@
 # holds power (contents + pull-requests write and a Claude auth secret), so §3's guardrails
 # are load-bearing here too:
 #
-#   - Trigger is the `address` label on a PR — a deliberate human act, the parallel to
-#     `ready`. Gated twice on top of the label: same-repo PRs only (no forks), and the
-#     labeler must hold write access — labeling only needs triage, and PR comments are a
-#     broader, lower-trust surface than issue bodies.
-#   - pull_request_target, NOT pull_request: pull_request_target runs THIS file from the
-#     default branch, so a PR branch cannot ship a self-escalating variant of this workflow
-#     — the same §3 neutralization the executor gets from `issues` events. Checking out the
-#     PR head under pull_request_target is the classic footgun, which is exactly why the
-#     label + write-access gates are mandatory, not decorative.
+#   - Trigger is an inline review comment from a write-access human — you comment, the
+#     agent addresses. The comment is just the doorbell: each run addresses ALL outstanding
+#     feedback, so a burst of comments converges on one pass (see concurrency). Gated on
+#     top of the event: same-repo PRs only (no forks), and the commenter must hold write
+#     access — commenting needs no permission at all, and PR comments are a broader,
+#     lower-trust surface than issue bodies. Caveat: a review with only a summary body and
+#     no inline comments never fires — drop one inline comment to summon the agent.
+#   - pull_request_review_comment events always run THIS file from the default branch
+#     (like `issues` events), so a PR branch cannot ship a self-escalating variant of this
+#     workflow — the same §3 neutralization the executor gets. Checking out the PR head
+#     under a default-branch-context event is the classic footgun, which is exactly why
+#     the write-access gate is mandatory, not decorative.
 #   - permissions is the narrow pair the action needs and NOTHING more. No `id-token:
 #     write`; the explicit `github_token` skips the App/OIDC path (#57/#13). The action is
 #     SHA-pinned (≥ v1.0.94, the auth-bypass fix).
@@ -21,37 +24,39 @@
 #
 # v0 feeds RAW review-comment text to the agent — there is no `ready`-style frozen
 # snapshot on the PR side (#39/#40/#41 are issue-side machinery), so this is a wider
-# untrusted-input door. The gates above (a write-access human deliberately labels) plus
-# prompt framing are the containment; sanitization is a separate follow-up.
+# untrusted-input door. The gates above (only a write-access human's comment summons the
+# agent) plus prompt framing are the containment; sanitization is a separate follow-up.
 #
 # Inherited gotcha (#58): commits pushed with GITHUB_TOKEN do NOT re-trigger ci.yml — the
 # prompt has the agent say so in its summary comment so a human re-runs checks.
 name: hgt-review
 
 on:
-  pull_request_target:
-    types: [labeled]
+  pull_request_review_comment:
+    types: [created]
 
 permissions:
   contents: write
   pull-requests: write
 
+# Submitting a review with N inline comments fires N events. cancel-in-progress collapses
+# the burst: superseded runs die, the survivor sees every outstanding thread. A canceled
+# run that already pushed is harmless — the next run checks out the updated head.
 concurrency:
   group: hgt-review-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   respond:
     name: respond
     if: >
-      github.event.label.name == 'address' &&
       github.event.pull_request.state == 'open' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      # Labeling only requires triage; hold the trigger to write+. Fails closed: an API
-      # error reads as no access.
-      - name: Gate — labeler must have write access
+      # Anyone can comment on a public PR; hold the trigger to write+. Fails closed: an
+      # API error reads as no access.
+      - name: Gate — commenter must have write access
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -62,8 +67,8 @@ jobs:
             *) echo "::error::@${{ github.actor }} lacks write access ($perm) — refusing to run."; exit 1 ;;
           esac
 
-      # The PR head, not the default pull_request_target base. Full history so the agent
-      # can diff against main. Pinned to match ci.yml.
+      # The PR head — comment events default to the default branch. Full history so the
+      # agent can diff against main. Pinned to match ci.yml.
       - name: Check out the PR branch
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -73,8 +78,9 @@ jobs:
       # Snapshot the trigger state the fail-loud guard compares against, then collect the
       # outstanding feedback (unresolved review threads + review summaries) for the prompt.
       # "Outstanding" = unresolved threads, or a CHANGES_REQUESTED review decision — review
-      # bodies alone never resolve, so they can't be the trigger signal or a re-label after
-      # everything is addressed would loop on stale text forever.
+      # bodies alone never resolve, so a run keyed on them after everything is addressed
+      # would loop on stale text forever. (Empty is possible despite the trigger comment:
+      # a queued run can start after its thread was resolved or deleted.)
       #
       # The heredoc delimiter is a uuid: feedback is untrusted text, and a guessable
       # delimiter would let a crafted comment terminate the block and set arbitrary step
