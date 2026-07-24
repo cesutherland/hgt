@@ -105,9 +105,14 @@ The preflight prints these commands verbatim when the jail can't start.
   worktree." Fix: bind the common dir ro and selectively re-bind rw only `objects/`, this
   worktree's dir, and its own branch ref/reflog. The read-all-branches part is inherent to
   sharing the object store (it's the repo's own code) — only a full independent clone removes it.
-- **Scoped push token not provisioned.** The `HGT_SANDBOX_GITHUB_TOKEN` seam exists but no
-  machine-user PAT is wired yet, so pushes from inside the jail fail closed until one is. That
-  provisioning is its own slice.
+- **Scoped push token — seam now wired (#81), provisioning still separate.** The
+  `HGT_SANDBOX_GITHUB_TOKEN` seam is plumbed: set it and the jail gains a credentialed push/PR
+  path (git@→https, gh as git's credential helper), the same seam attended + unattended (#17).
+  The token rides a mode-600 bound gh config dir, never an env var/argv/pane, so `run`'s echo and
+  tmux `send-keys` can't leak it. No token → fail-closed as before. Two things stay out of scope:
+  **minting** the machine-user PAT (its own slice), and — load-bearing — **egress (#74)**: a
+  readable token under today's `--share-net` is the exact exfil surface flagged above, so this
+  seam is safe only while egress is trusted/constrained. Wire the PAT *with* #74, not ahead of it.
 - **Bind set is machine-specific** (nvm version, install layout). Overridable via
   `HGT_SANDBOX_RO_BIND` (extra ro paths) and `HGT_SANDBOX_SETENV` (extra env passthrough) so
   dogfooding friction is a config change, not a code change.

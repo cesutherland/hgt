@@ -160,6 +160,9 @@ hgt work <n>             # local execution: worktree + Claude session for issue 
 - create a git worktree for the issue's branch and a **named** Claude session in it
 - wire the frozen plan/snapshot into the session
 - handle teardown / `--resume`
+- **publish boundary (#81):** the sandboxed session holds no push credential by default;
+  `HGT_SANDBOX_GITHUB_TOKEN` (a scoped machine-user PAT, on a bound gh config dir — never an
+  env var) opts in a push/PR path, the same seam attended + unattended. Gated on egress (#74).
 - respect branch stacking: default `--worktree` bases off `origin/HEAD`, which breaks
   stacks — use `worktree.baseRef: "head"` or fall back to manual
   `git worktree add -b <branch> <base>` for stacked work.
