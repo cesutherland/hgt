@@ -4,7 +4,8 @@ cmd_init() {
   case "${1:-}" in
     -h | --help)
       printf 'usage: hgt init\n\nIdempotently scaffold hgt into the current repo:\n'
-      printf '  - stamp CLAUDE.md, .worktreeinclude, .hgt/hooks/normalize (never clobbers)\n'
+      printf '  - stamp CLAUDE.md, .worktreeinclude, .hgt/hooks/normalize,\n'
+      printf '    .claude/skills/review-response/SKILL.md (never clobbers)\n'
       printf '  - create the work-state labels\n'
       printf '  - print the branch-protection script for the default branch\n'
       return 0
@@ -20,7 +21,8 @@ cmd_init() {
   for spec in \
     "CLAUDE.md|templates/CLAUDE.md|" \
     ".worktreeinclude|templates/.worktreeinclude|" \
-    ".hgt/hooks/normalize|templates/hooks/normalize|0755"; do
+    ".hgt/hooks/normalize|templates/hooks/normalize|0755" \
+    ".claude/skills/review-response/SKILL.md|templates/skills/review-response/SKILL.md|"; do
     IFS='|' read -r dest src mode <<<"$spec"
     stamp_file "$dest" <"$HGT_ROOT/$src"
     if [ "$STAMP_RESULT" = created ]; then

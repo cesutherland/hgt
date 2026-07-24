@@ -102,8 +102,10 @@ hgt work <n>             # local execution: worktree + Claude session for issue 
 ```
 
 - **`hgt init`** drops a lean `CLAUDE.md` and gated, least-privilege workflow file(s),
-  creates the labels, applies the `main` ruleset, writes `.worktreeinclude`, and installs
-  the unicode-normalization hook.
+  creates the labels, applies the `main` ruleset, writes `.worktreeinclude`, installs the
+  unicode-normalization hook, and installs the `review-response` skill (triages PR review
+  feedback into fix/ack/discuss/reject/defer; see
+  [templates/skills/review-response/SKILL.md](templates/skills/review-response/SKILL.md)).
 - **`hgt issue ready <n>`** is the security-critical verb: unicode-normalize the body,
   write a frozen snapshot, apply the `ready` label. This is the trust boundary — treat it
   as security-sensitive code.

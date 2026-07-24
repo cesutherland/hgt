@@ -11,6 +11,8 @@ load helper
   diff "$TMP/.worktreeinclude"      "$HGT_REPO/templates/.worktreeinclude"
   diff "$TMP/.hgt/hooks/normalize"  "$HGT_REPO/templates/hooks/normalize"
   [ -x "$TMP/.hgt/hooks/normalize" ]
+  diff "$TMP/.claude/skills/review-response/SKILL.md" \
+       "$HGT_REPO/templates/skills/review-response/SKILL.md"
 }
 
 @test "init creates the three state labels through the gh module, idempotently (--force)" {
@@ -41,7 +43,7 @@ load helper
   run "$HGT_BIN" init
   [ "$status" -eq 0 ]
   [[ "$output" == *"skip   CLAUDE.md (exists)"* ]]
-  [[ "$output" == *"0 created, 3 skipped"* ]]
+  [[ "$output" == *"0 created, 4 skipped"* ]]
 }
 
 @test "init never clobbers a user's edits" {
