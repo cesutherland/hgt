@@ -6,14 +6,26 @@
 # not tmux's effects (asserting those would re-test tmux, not hgt — see ADR 0002/D1).
 #
 # Records "tmux <args...>" to $SHIM_LOG and honors:
-#   has-session: exits per SHIM_TMUX_HAS_SESSION (default 1 = absent, like real tmux;
-#                set 0 to simulate a live session for resume/teardown tests)
+#   has-session:     exits per SHIM_TMUX_HAS_SESSION (default 1 = absent, like real tmux;
+#                    set 0 to simulate a live session for resume/teardown tests)
+#   display-message: prints SHIM_TMUX_CURRENT (the attached session's name, for #86's hop)
+#   list-sessions:   prints SHIM_TMUX_SESSIONS verbatim (multi-line "<last_attached> <name>")
 #   everything else: SHIM_TMUX_OUT / SHIM_TMUX_EXIT, same as _shim
 set -euo pipefail
 printf 'tmux %s\n' "$*" >>"${SHIM_LOG:?SHIM_LOG not set}"
 
 if [ "${1:-}" = has-session ]; then
   exit "${SHIM_TMUX_HAS_SESSION:-1}"
+fi
+
+if [ "${1:-}" = display-message ]; then
+  printf '%s\n' "${SHIM_TMUX_CURRENT:-}"
+  exit 0
+fi
+
+if [ "${1:-}" = list-sessions ]; then
+  [ -n "${SHIM_TMUX_SESSIONS:-}" ] && printf '%s\n' "$SHIM_TMUX_SESSIONS"
+  exit 0
 fi
 
 # For the #25 quoting conformance test: the flat $SHIM_LOG can't preserve a keys arg that

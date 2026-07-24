@@ -314,6 +314,119 @@ Build the widget.'
   ! grep -q '9-other-issue/5-add-widget' "$SHIM_LOG"
 }
 
+# --- work rm: from-within inference + tmux hop (#86) -------------------------------------------
+# `hgt work rm` run with no <n>, from inside the target worktree/session: infer <n> off the
+# worktree dir, and — from that session's own tmux — hop to the most-recently-active surviving
+# session before killing it, instead of dumping the caller to a bare shell.
+
+@test "work rm infers <n> from the worktree dir when run from inside it, no <n> given" {
+  unset TMUX
+  mkdir -p "$TMP/hgt" "$TMP/hgt-worktrees/5-add-widget"
+  export SHIM_GIT_COMMON_DIR="$TMP/hgt/.git"  # what real git answers from any worktree
+  cd "$TMP/hgt-worktrees/5-add-widget"
+
+  run "$HGT_BIN" work rm
+  [ "$status" -eq 0 ]
+  grep -q "^git worktree remove $TMP/hgt-worktrees/5-add-widget\$" "$SHIM_LOG"
+}
+
+@test "work rm explicit <n> overrides inference" {
+  unset TMUX
+  mkdir -p "$TMP/hgt" "$TMP/hgt-worktrees/5-add-widget" "$TMP/hgt-worktrees/9-other-issue"
+  export SHIM_GIT_COMMON_DIR="$TMP/hgt/.git"
+  cd "$TMP/hgt-worktrees/5-add-widget"  # would infer 5, but we say 9
+
+  run "$HGT_BIN" work rm 9
+  [ "$status" -eq 0 ]
+  grep -q "^git worktree remove $TMP/hgt-worktrees/9-other-issue\$" "$SHIM_LOG"
+  ! grep -q '5-add-widget' "$SHIM_LOG"
+}
+
+@test "work rm with no <n> and not inside a worktree errors instead of guessing" {
+  unset TMUX
+  mkdir -p "$TMP/hgt"
+  cd "$TMP/hgt"  # the main checkout, not one of hgt's issue worktrees
+
+  run "$HGT_BIN" work rm
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no issue given and not inside a worktree"* ]]
+}
+
+@test "work rm hops to the most-recently-active surviving session before killing the current one" {
+  work_env
+  "$HGT_BIN" work 5 --no-session >/dev/null 2>&1
+  : >"$SHIM_LOG"
+  export TMUX=/tmp/fake,1,0
+  export SHIM_TMUX_CURRENT=hgt/5-add-widget  # attached to the session being torn down
+  export SHIM_TMUX_SESSIONS='100 hgt/5-add-widget
+300 hgt/2-other
+200 hgt/3-third'
+
+  run env SHIM_TMUX_HAS_SESSION=0 "$HGT_BIN" work rm 5
+  [ "$status" -eq 0 ]
+  # newest OTHER session (2-other, last_attached 300) wins, and switch-client lands before
+  # kill-session — killing the attached session first would detach the client before it can hop
+  grep '^tmux ' "$SHIM_LOG" | grep -Eo 'switch-client|kill-session' | tr '\n' ' ' | grep -q '^switch-client kill-session $'
+  grep -q '^tmux switch-client -t hgt/2-other$' "$SHIM_LOG"
+}
+
+@test "work rm falls back to a plain teardown when no other session survives" {
+  work_env
+  "$HGT_BIN" work 5 --no-session >/dev/null 2>&1
+  : >"$SHIM_LOG"
+  export TMUX=/tmp/fake,1,0
+  export SHIM_TMUX_CURRENT=hgt/5-add-widget
+  export SHIM_TMUX_SESSIONS='100 hgt/5-add-widget'  # only the target itself is live
+
+  run env SHIM_TMUX_HAS_SESSION=0 "$HGT_BIN" work rm 5
+  [ "$status" -eq 0 ]
+  ! grep -q '^tmux switch-client' "$SHIM_LOG"
+  grep -q '^tmux kill-session -t hgt/5-add-widget$' "$SHIM_LOG"
+}
+
+@test "work rm does not hop when attached to a different session than the one being killed" {
+  work_env
+  "$HGT_BIN" work 5 --no-session >/dev/null 2>&1
+  : >"$SHIM_LOG"
+  export TMUX=/tmp/fake,1,0
+  export SHIM_TMUX_CURRENT=hgt/9-other  # attached elsewhere, e.g. removing issue 5 remotely
+  export SHIM_TMUX_SESSIONS='100 hgt/5-add-widget
+300 hgt/9-other'
+
+  run env SHIM_TMUX_HAS_SESSION=0 "$HGT_BIN" work rm 5
+  [ "$status" -eq 0 ]
+  ! grep -q '^tmux switch-client' "$SHIM_LOG"
+  grep -q '^tmux kill-session -t hgt/5-add-widget$' "$SHIM_LOG"
+}
+
+@test "work rm attempts no hop outside tmux" {
+  work_env  # $TMUX unset
+  "$HGT_BIN" work 5 --no-session >/dev/null 2>&1
+  : >"$SHIM_LOG"
+
+  run env SHIM_TMUX_HAS_SESSION=0 "$HGT_BIN" work rm 5
+  [ "$status" -eq 0 ]
+  ! grep -q '^tmux display-message' "$SHIM_LOG"
+  ! grep -q '^tmux switch-client'   "$SHIM_LOG"
+  grep -q '^tmux kill-session -t hgt/5-add-widget$' "$SHIM_LOG"
+}
+
+@test "work rm --no-switch skips the hop even when attached to the killed session" {
+  work_env
+  "$HGT_BIN" work 5 --no-session >/dev/null 2>&1
+  : >"$SHIM_LOG"
+  export TMUX=/tmp/fake,1,0
+  export SHIM_TMUX_CURRENT=hgt/5-add-widget
+  export SHIM_TMUX_SESSIONS='100 hgt/5-add-widget
+300 hgt/2-other'
+
+  run env SHIM_TMUX_HAS_SESSION=0 "$HGT_BIN" work rm 5 --no-switch
+  [ "$status" -eq 0 ]
+  ! grep -q '^tmux display-message' "$SHIM_LOG"
+  ! grep -q '^tmux switch-client'   "$SHIM_LOG"
+  grep -q '^tmux kill-session -t hgt/5-add-widget$' "$SHIM_LOG"
+}
+
 # --- sandbox (#67, ADR 0005) -------------------------------------------------------------------
 # The jail is part of hgt's contract now: which bwrap flags it wraps claude in, and that it fails
 # closed rather than launch an unconfined agent. The bwrap shim execs the wrapped command, so the

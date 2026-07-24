@@ -7,7 +7,7 @@
 _work_usage() {
   cat <<'EOF'
 usage: hgt work <n> [--base <ref>] [--no-session] [--no-tmux]
-       hgt work rm <n> [--force]
+       hgt work rm [<n>] [--force] [--no-switch]
 
 Open (or resume) a local worktree + named Claude session for issue <n>.
 
@@ -15,7 +15,10 @@ Open (or resume) a local worktree + named Claude session for issue <n>.
   --no-session    ensure the worktree, don't launch claude
   --no-tmux       launch claude inline instead of in a detached tmux session
   --no-sandbox    launch the agent UNCONFINED (default confines it to the worktree, #67)
-  rm <n>          tear the worktree down (refuses dirty/unpushed work without --force)
+  rm [<n>]        tear the worktree down (refuses dirty/unpushed work without --force);
+                  <n> inferred from the worktree you're standing in when omitted
+    --no-switch   from inside the killed session's tmux, stay put instead of hopping to
+                  the most-recently-active surviving session
 EOF
 }
 
@@ -241,18 +244,58 @@ launch_session() {
   _tmux_attach "$name"
 }
 
+# _infer_issue — the issue number for the worktree we're standing in, when `hgt work rm` is
+# run with no <n> (#86). Source of truth is the worktree dir name `<base>/<n>-<slug>` (#36 /
+# ADR 0004): resolve *this* worktree's own toplevel (not $PWD, so a subdirectory still
+# resolves; not _repo_root, which deliberately targets the MAIN repo instead — here we want
+# the opposite) and check it lives under the worktree base. Prints <n> to stdout; fails with no
+# output when we're not inside one of hgt's issue worktrees (main checkout included).
+_infer_issue() {
+  local top base name n
+  top=$(git rev-parse --path-format=absolute --show-toplevel 2>/dev/null) || return 1
+  base=$(_worktree_base)
+  case "$top" in "$base"/*) ;; *) return 1 ;; esac
+  name="${top#"$base"/}"
+  n="${name%%-*}"
+  case "$n" in '' | *[!0-9]*) return 1 ;; esac
+  printf '%s' "$n"
+}
+
+# _hop_before_kill NAME — from inside the tmux session about to be killed, switch the client to
+# the most-recently-active *other* live session first, so teardown leaves you in tmux instead of
+# dumping you to a bare shell (#86). Order matters: switch-client must land *before*
+# kill-session — killing the attached session first detaches the client, and there's no session
+# left to hop to. A no-op outside tmux or when the attached session isn't the one being killed;
+# falls through silently (tmux's normal kill-time detach) when no other session survives.
+_hop_before_kill() {
+  local name="$1" current target
+  [ -n "${TMUX:-}" ] || return 0
+  current=$(tmux display-message -p '#S' 2>/dev/null) || return 0
+  [ "$current" = "$name" ] || return 0
+
+  # #{session_last_attached} sorts numerically-newest-first; drop the target, take the top name.
+  target=$(tmux list-sessions -F '#{session_last_attached} #{session_name}' 2>/dev/null \
+    | awk -v skip="$name" '$2 != skip' | sort -rn | awk 'NR==1 {print $2}')
+  [ -n "$target" ] || return 0
+  run tmux switch-client -t "$target"
+}
+
 cmd_work_rm() {
-  local n="" force=0
+  local n="" force=0 no_switch="${HGT_WORK_RM_NO_SWITCH:-0}"
   while [ $# -gt 0 ]; do
     case "$1" in
       -f | --force) force=1 ;;
+      --no-switch) no_switch=1 ;;
       -h | --help) _work_usage; return 0 ;;
       -*) die "hgt work rm: unknown flag $1" ;;
       *) [ -z "$n" ] && n="$1" || die "hgt work rm: unexpected argument $1" ;;
     esac
     shift
   done
-  [ -n "$n" ] || die "hgt work rm: missing issue number (try 'hgt work rm <n>')"
+  if [ -z "$n" ]; then
+    # No <n>: infer from the worktree we're standing in (#86). Explicit <n> above always wins.
+    n=$(_infer_issue) || die "hgt work rm: no issue given and not inside a worktree — specify <n>"
+  fi
   case "$n" in *[!0-9]*) die "hgt work rm: issue must be a number, got '$n'" ;; esac
 
   local wtpath
@@ -283,6 +326,7 @@ cmd_work_rm() {
   # has-session so an inline (--no-tmux) or already-dead run doesn't error.
   local name; name=$(_session_name "$n" "$wtpath")
   if tmux has-session -t "$name" 2>/dev/null; then
+    [ "$no_switch" -eq 1 ] || _hop_before_kill "$name"
     run tmux kill-session -t "$name"
   fi
 
