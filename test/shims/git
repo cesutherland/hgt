@@ -25,6 +25,14 @@ if [ "${1:-}" = worktree ] && [ "${2:-}" = add ]; then
   done
 fi
 
+# `-C <wt> remote get-url origin` — the egress allowlist (#74) asks git for the worktree's
+# remote so its host can be added to the proxy's allowlist. SHIM_GIT_REMOTE_URL lets a test pick
+# an https/ssh/git@ form; default models the real cesutherland/hgt origin.
+if [ "${1:-}" = -C ] && [ "${3:-}" = remote ] && [ "${4:-}" = get-url ]; then
+  printf '%s\n' "${SHIM_GIT_REMOTE_URL:-https://github.com/cesutherland/hgt.git}"
+  exit 0
+fi
+
 # `-C <wt> rev-parse ... --git-common-dir` — the sandbox seam (#67) asks git for the repo's
 # shared .git so it can bind-mount it into the jail. Echo `<wt>/.git` off the `-C` value (a real
 # worktree's common dir lives under the main repo, but the exact path isn't hgt's contract — that

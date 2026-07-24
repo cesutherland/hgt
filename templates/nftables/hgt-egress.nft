@@ -1,0 +1,23 @@
+# hgt egress allowlist (issue #74, ADR 0006). Confines every bwrap-jailed Claude session (run
+# under the `hgt-sandbox.slice` cgroup via `systemd-run --slice=hgt-sandbox --scope`) to the
+# local egress proxy on 127.0.0.1:8874 and nothing else — the proxy, not this ruleset, decides
+# which hostnames (the Anthropic API, the git remote) are actually reachable through it. Traffic
+# from every other cgroup on the host (i.e. everything that isn't a jailed session) is untouched.
+#
+# Install once:
+#   sudo install -d /etc/nftables.d
+#   sudo install -m644 templates/nftables/hgt-egress.nft /etc/nftables.d/hgt-egress.nft
+#   sudo nft -f /etc/nftables.d/hgt-egress.nft
+#
+# The proxy port is fixed at install time (8874, HGT_SANDBOX_EGRESS_PORT's default). If you
+# override that env var, edit the dport below and re-run the three commands above.
+table inet hgt_egress {
+  chain output {
+    type filter hook output priority filter; policy accept;
+
+    # hgt-sandbox.slice sits directly under the cgroup root (level 1), so this matches every
+    # jailed session's scope (hgt-sandbox-<n>-<slug>.scope) regardless of its exact name.
+    socket cgroupv2 level 1 "hgt-sandbox.slice" ip daddr 127.0.0.1 tcp dport 8874 accept
+    socket cgroupv2 level 1 "hgt-sandbox.slice" drop
+  }
+}

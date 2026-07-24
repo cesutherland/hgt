@@ -113,14 +113,20 @@ hgt work <n>             # local execution: worktree + Claude session for issue 
   (issue #67, [ADR 0005](docs/adr/0005-issue-67-sandbox.md)): a bubblewrap FS jail wraps the
   agent — worktree + shared `.git` read-write, the rest of `$HOME` (`~/.ssh`, admin `gh`
   auth, sibling repos) gone — while tmux and the human's shell pane stay on the host so
-  `tmux attach` is untouched. On by default and fail-closed; `--no-sandbox` opts out. On
-  Ubuntu 24.04+ install the one-time AppArmor profile first (the preflight prints how).
+  `tmux attach` is untouched. Its network is likewise **egress-allowlisted**
+  (issue #74, [ADR 0006](docs/adr/0006-issue-74-egress-allowlist.md)): the jail is pinned to a
+  local proxy that only lets a CONNECT tunnel through to the Anthropic API or the worktree's
+  git remote, enforced by a cgroup-scoped nftables rule so it can't just be bypassed. Both are
+  on by default and fail-closed; `--no-sandbox` opts out of both. On Ubuntu 24.04+ install the
+  one-time AppArmor profile and nftables rule first (the preflight prints how).
 
 ## Tests & CI
 
 The conformance suite is [bats](https://github.com/bats-core/bats-core); run it with
-`./test/run.sh`. It's hermetic — external commands (`gh`/`git`/`tmux`/`claude`) are
-PATH-shimmed in `test/shims/`, so there's no network, no secrets, and no real repo mutation.
+`./test/run.sh`. It's hermetic — external commands (`gh`/`git`/`tmux`/`claude`/`bwrap`) are
+PATH-shimmed in `test/shims/`, and `python3`/`systemd-run` (the egress proxy + cgroup wrapper,
+#74) are stubbed as exported bash functions in `test/helper.bash` — so there's no network, no
+secrets, and no real repo mutation.
 
 CI (`.github/workflows/ci.yml`) runs that suite on every PR to `main` and reports a
 `test` status check. Per spec §3 the workflow is deliberately poor and powerless:

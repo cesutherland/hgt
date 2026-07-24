@@ -22,6 +22,12 @@ title=Add a Widget
 ---body---
 Build the widget.
 Wire it up.'
+  # Egress allowlist (#74): point both at $TMP so the suite stays hermetic, and pre-satisfy the
+  # nft preflight (the one-time install is out of scope for these tests — see the dedicated
+  # "fails closed" test below, which deliberately un-satisfies it).
+  export HGT_SANDBOX_EGRESS_PIDFILE="$TMP/egress-proxy.pid"
+  export HGT_SANDBOX_EGRESS_NFT_FILE="$TMP/hgt-egress.nft"
+  : >"$HGT_SANDBOX_EGRESS_NFT_FILE"
 }
 
 @test "work creates a worktree on <n>-<slug> under <user>/<n>-<slug>, carries includes, seeds + commits the plan file" {
@@ -119,8 +125,8 @@ Wire it up.'
   grep -q "^tmux new-session -d -s hgt/5-add-widget -c $TMP/wt/5-add-widget\$" "$SHIM_LOG"
   # claude launched *into* that shell via send-keys (#47) — not as the pane's PID 1, so a
   # claude exit/failure leaves the session alive with a live shell, not an evaporated session.
-  # Confined by the bwrap jail (#67): the sandbox prefix wraps the claude command.
-  grep -q "^tmux send-keys -t hgt/5-add-widget 'bwrap' .* claude -n 'hgt/5-add-widget' .* Enter\$" "$SHIM_LOG"
+  # Confined by the bwrap jail (#67), itself wrapped in the egress cgroup scope (#74).
+  grep -q "^tmux send-keys -t hgt/5-add-widget 'systemd-run' .* 'bwrap' .* claude -n 'hgt/5-add-widget' .* Enter\$" "$SHIM_LOG"
   # outside tmux -> attach, not switch-client
   grep -q '^tmux attach-session -t hgt/5-add-widget$' "$SHIM_LOG"
   ! grep -q '^tmux switch-client' "$SHIM_LOG"
@@ -162,12 +168,14 @@ Wire it up.'
   # two converge — a newline inside the open '...' is line continuation in a real pane too, not an
   # early submit, so the argv is identical (manually verified against tmux, see PR #49). A broken
   # quote would instead split the prompt, run `id`, or die on a syntax error. The sandbox (#67)
-  # prefixes the keys with an _shq'd bwrap jail; a passthrough bwrap() drops its args up to the
-  # wrapped command, so the same reconstruction proves quoting survives the full jailed command.
+  # prefixes the keys with an _shq'd bwrap jail, itself wrapped in the egress cgroup scope (#74);
+  # passthrough systemd-run()/bwrap() functions drop their own args up to the next stage, so the
+  # same reconstruction proves quoting survives the full jailed command.
   run /bin/sh -c 'claude() {
       printf "%s" "$2" >'"$TMP"'/got_name
       printf "%s" "$3" >'"$TMP"'/got_prompt
     }
+    systemd-run() { while [ "$1" != bwrap ]; do shift; done; "$@"; }
     bwrap() { while [ "$1" != claude ]; do shift; done; "$@"; }
     '"$(cat "$TMP/keys")"
   [ "$status" -eq 0 ]
@@ -335,6 +343,9 @@ Build the widget.'
   # gpg-signing forced off inside — the agent has no ~/.gnupg, can't sign as the human
   [[ "$bw" == *"--setenv GIT_CONFIG_KEY_0 commit.gpgsign"* ]]
   [[ "$bw" == *"GIT_CONFIG_VALUE_0 false"* ]]
+  # egress (#74): every proxy-aware tool is pinned at the local allowlisting proxy
+  [[ "$bw" == *"--setenv HTTPS_PROXY http://127.0.0.1:8874"* ]]
+  [[ "$bw" == *"--setenv NO_PROXY "* ]]
 }
 
 @test "sandbox: the jail never binds ~/.ssh or the admin gh auth" {
@@ -398,4 +409,81 @@ Build the widget.'
   [ "$status" -eq 0 ]
   ! grep -q '^bwrap ' "$SHIM_LOG"
   ! grep -q '^tmux send-keys' "$SHIM_LOG"
+}
+
+# --- egress allowlist (#74, ADR 0006) -----------------------------------------------------------
+# The jail still shares the host netns (loopback, for the proxy), but bwrap itself runs inside a
+# dedicated hgt-sandbox cgroup scope (systemd-run), and the proxy it's pinned to is what decides
+# which hostnames a CONNECT tunnel may reach. These pin: the cgroup wrapper is present, the
+# allowlist covers the Anthropic API + the git remote, the proxy isn't respawned when already
+# live, and the nft preflight fails closed like the AppArmor one does.
+
+@test "egress: bwrap runs inside a dedicated hgt-sandbox cgroup scope" {
+  work_env
+  run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  local sr; sr=$(grep '^systemd-run ' "$SHIM_LOG")
+  [[ "$sr" == *"--slice=hgt-sandbox"* ]]
+  [[ "$sr" == *"--scope"* ]]
+  [[ "$sr" == *"--unit=hgt-sandbox-5-add-widget"* ]]
+  # the real bwrap prefix still lands, past the systemd-run wrapper (transparency, like #67)
+  grep -q '^bwrap ' "$SHIM_LOG"
+}
+
+@test "egress: the proxy is started allowlisting the Anthropic API + the worktree's git remote" {
+  work_env
+  export SHIM_GIT_REMOTE_URL=https://github.com/cesutherland/hgt.git
+  run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  local py; py=$(grep '^python3 ' "$SHIM_LOG")
+  [[ "$py" == *"egress-proxy.py"* ]]
+  [[ "$py" == *"8874"* ]]
+  [[ "$py" == *"api.anthropic.com"* ]]
+  [[ "$py" == *"github.com"* ]]
+}
+
+@test "egress: an ssh remote's host still lands in the allowlist (best-effort)" {
+  work_env
+  export SHIM_GIT_REMOTE_URL=git@github.com:cesutherland/hgt.git
+  run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  grep '^python3 ' "$SHIM_LOG" | grep -q 'github.com'
+}
+
+@test "egress: HGT_SANDBOX_EGRESS_ALLOW extends the allowlist (dogfooding seam)" {
+  work_env
+  HGT_SANDBOX_EGRESS_ALLOW=registry.npmjs.org run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  grep '^python3 ' "$SHIM_LOG" | grep -q 'registry.npmjs.org'
+}
+
+@test "egress: a live proxy is not restarted (pidfile liveness)" {
+  work_env
+  # $$ is bats' own PID — alive for the duration of the test, so kill -0 succeeds and the
+  # spawn is skipped entirely.
+  echo $$ >"$HGT_SANDBOX_EGRESS_PIDFILE"
+  run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  ! grep -q '^python3 ' "$SHIM_LOG"
+}
+
+@test "egress: fails closed with the nftables remediation when the allowlist isn't installed" {
+  work_env
+  rm -f "$HGT_SANDBOX_EGRESS_NFT_FILE"
+  run "$HGT_BIN" work 5
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"egress allowlist not installed"* ]]
+  [[ "$output" == *"nft -f"* ]]  # the exact fix, printed
+  # fail closed: no claude, no tmux session, no proxy started
+  ! grep -q '^claude ' "$SHIM_LOG"
+  ! grep -q '^tmux new-session' "$SHIM_LOG"
+  ! grep -q '^python3 ' "$SHIM_LOG"
+}
+
+@test "egress: --no-sandbox skips the proxy and the cgroup wrapper too" {
+  work_env
+  run "$HGT_BIN" work 5 --no-tmux --no-sandbox
+  [ "$status" -eq 0 ]
+  ! grep -q '^systemd-run ' "$SHIM_LOG"
+  ! grep -q '^python3 ' "$SHIM_LOG"
 }
