@@ -36,9 +36,18 @@ fi
 # `rev-parse ... --git-common-dir` (no -C) — the main-repo resolver behind _worktree_base /
 # _repo_slug (#65). SHIM_GIT_COMMON_DIR lets a test stand inside a fake worktree and still get
 # the main repo's .git; default $PWD/.git models running from the main checkout.
+#
+# `rev-parse ... --show-toplevel` — the CURRENT worktree's own root, behind _infer_issue (#86):
+# the opposite lookup from --git-common-dir above (that one deliberately targets the main repo;
+# this one wants whichever worktree we're standing in). Real git walks up from $PWD to find it;
+# the shim just echoes $PWD, matching every test's convention of cd-ing straight into the
+# worktree dir under test.
 if [ "${1:-}" = rev-parse ]; then
   for a in "$@"; do
-    case "$a" in --git-common-dir) printf '%s\n' "${SHIM_GIT_COMMON_DIR:-$PWD/.git}"; exit 0 ;; esac
+    case "$a" in
+      --git-common-dir) printf '%s\n' "${SHIM_GIT_COMMON_DIR:-$PWD/.git}"; exit 0 ;;
+      --show-toplevel) printf '%s\n' "$PWD"; exit 0 ;;
+    esac
   done
 fi
 
