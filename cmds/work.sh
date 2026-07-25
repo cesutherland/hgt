@@ -273,7 +273,7 @@ _hop_before_kill() {
   current=$(tmux display-message -p '#S' 2>/dev/null) || return 0
   [ "$current" = "$name" ] || return 0
 
-  # #{session_last_attached} sorts numerically-newest-first; drop the target, take the top name.
+  # Use #{session_last_attached} as a numeric sort key; drop the target, take the newest other session.
   target=$(tmux list-sessions -F '#{session_last_attached} #{session_name}' 2>/dev/null \
     | awk -v skip="$name" '$2 != skip' | sort -rn | awk 'NR==1 {print $2}')
   [ -n "$target" ] || return 0
