@@ -76,11 +76,14 @@ jobs:
           fetch-depth: 0
 
       # Snapshot the trigger state the fail-loud guard compares against, then collect the
-      # outstanding feedback (unresolved review threads + review summaries) for the prompt.
-      # "Outstanding" = unresolved threads, or a CHANGES_REQUESTED review decision — review
-      # bodies alone never resolve, so a run keyed on them after everything is addressed
-      # would loop on stale text forever. (Empty is possible despite the trigger comment:
-      # a queued run can start after its thread was resolved or deleted.)
+      # outstanding feedback for the prompt. "Outstanding" = unresolved threads, plus
+      # review bodies SUBMITTED AFTER the branch head — bodies never resolve, so without
+      # the cutoff one lingering unresolved thread would re-feed every stale summary
+      # forever (re-acted on, re-replied to, every run). Older-than-head bodies are
+      # presumed addressed by the pushes since; the flip side — body-only feedback that
+      # predates the last push needs a fresh inline comment to resummon the agent —
+      # matches the trigger's body-only caveat above. (Empty is possible despite the
+      # trigger comment: a queued run can start after its thread was resolved or deleted.)
       #
       # The heredoc delimiter is a uuid: feedback is untrusted text, and a guessable
       # delimiter would let a crafted comment terminate the block and set arbitrary step
@@ -99,9 +102,8 @@ jobs:
               query($owner: String!, $repo: String!, $number: Int!) {
                 repository(owner: $owner, name: $repo) {
                   pullRequest(number: $number) {
-                    reviewDecision
                     reviews(last: 20) {
-                      nodes { author { login } state body }
+                      nodes { author { login } state body submittedAt }
                     }
                     reviewThreads(first: 100) {
                       nodes {
@@ -116,26 +118,26 @@ jobs:
             -f repo="${{ github.event.repository.name }}" \
             -F number="${{ github.event.pull_request.number }}")
 
-          unresolved=$(echo "$resp" | jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not)] | length')
-          decision=$(echo "$resp" | jq -r '.data.repository.pullRequest.reviewDecision // ""')
-
-          if [ "$unresolved" -eq 0 ] && [ "$decision" != "CHANGES_REQUESTED" ]; then
-            echo "has_feedback=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::No outstanding review feedback on PR #${{ github.event.pull_request.number }} — nothing to do."
-            exit 0
-          fi
-          echo "has_feedback=true" >> "$GITHUB_OUTPUT"
-
-          feedback=$(echo "$resp" | jq -r '
+          head_epoch=$(git log -1 --format=%ct)
+          feedback=$(echo "$resp" | jq -r --argjson ht "$head_epoch" '
             .data.repository.pullRequest as $pr |
             ([$pr.reviews.nodes[]
-               | select((.body // "") != "" and (.state == "CHANGES_REQUESTED" or .state == "COMMENTED"))
+               | select((.body // "") != ""
+                   and (.state == "CHANGES_REQUESTED" or .state == "COMMENTED")
+                   and ((.submittedAt | fromdateiso8601) > $ht))
                | "### Review by @\(.author.login // "ghost") [\(.state)]\n\(.body)\n"]
              + [$pr.reviewThreads.nodes[]
                | select(.isResolved | not)
                | "### Unresolved thread — \(.path):\(.line // "?")\n"
                  + ([.comments.nodes[] | "[id \(.databaseId)] @\(.author.login // "ghost"): \(.body)"] | join("\n")) + "\n"])
             | join("\n")')
+
+          if [ -z "$feedback" ]; then
+            echo "has_feedback=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No outstanding review feedback on PR #${{ github.event.pull_request.number }} — nothing to do."
+            exit 0
+          fi
+          echo "has_feedback=true" >> "$GITHUB_OUTPUT"
 
           delim="HGT_FEEDBACK_$(uuidgen)"
           { echo "feedback<<$delim"; echo "$feedback"; echo "$delim"; } >> "$GITHUB_OUTPUT"
