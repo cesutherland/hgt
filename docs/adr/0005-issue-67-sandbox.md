@@ -1,6 +1,8 @@
 # ADR 0005 — Issue #67: sandbox the Claude session `hgt work` spawns
 
-- **Status:** accepted
+- **Status:** accepted; **mechanism superseded by [ADR 0007](0007-issue-92-sandbox-mechanism.md)**
+  (`@anthropic-ai/sandbox-runtime` replaces the hand-rolled bwrap argv). The threat model, the
+  wrap-claude-only constraint, and the fail-closed posture below all still hold.
 - **Date:** 2026-07-22
 - **Context:** Local execution runs Claude Code with full access to the machine — `$HOME`,
   `~/.ssh`, the admin `gh` auth, sibling repos, arbitrary FS — while `hgt work` reads the
@@ -92,12 +94,13 @@ The preflight prints these commands verbatim when the jail can't start.
   cross-project history — is the lesser half.) Fix: a dedicated minimal config home
   (`CLAUDE_CONFIG_DIR`) that carries only the credential and no host settings/hooks. Bumped from
   "someday" to the next slice.
-- **A readable credential + unfiltered egress exfiltrates (#74).** `~/.claude.json` is bound
-  readable and `--share-net` gives the full host network (the agent needs the Anthropic API + the
-  git remote). Individually tolerable; **together** an injected agent can steal the Anthropic
-  token — and the whole worktree — to any host. So AC #2 holds *structurally* (no admin `gh`), but
-  "reach **only** a scoped credential/network" does not until egress is constrained (proxy or
-  netns+nftables). Prioritized alongside #73 — the two are the escape+exfil pair.
+- **A readable credential + unfiltered egress exfiltrates (#74, addressed by [ADR 0007](0007-issue-92-sandbox-mechanism.md)).**
+  `~/.claude.json` is bound readable and `--share-net` gives the full host network (the agent
+  needs the Anthropic API + the git remote). Individually tolerable; **together** an injected
+  agent can steal the Anthropic token — and the whole worktree — to any host. So AC #2 holds
+  *structurally* (no admin `gh`), but "reach **only** a scoped credential/network" does not until
+  egress is constrained. ADR 0007 closes the egress half by adopting SRT, whose `--unshare-net`
+  jail has no unfiltered path out. The credential stays readable — that's #73's half.
 - **The `.git` bind confines to the repo, not the worktree (#75).** Worktrees share the object
   store + refs, so rw-binding the common `.git` lets the agent rewrite any ref (incl. local
   `main`), write `.git/hooks/*` (a host-executed hook — an escape, same class as #73), and read
