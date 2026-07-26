@@ -1,0 +1,128 @@
+# ADR 0007 — Issue #92: adopt `@anthropic-ai/sandbox-runtime` as the sandbox mechanism
+
+- **Status:** accepted
+- **Date:** 2026-07-26
+- **Supersedes:** ADR 0005's **mechanism** (the hand-rolled `bwrap` argv in `lib/sandbox.sh`).
+  ADR 0005's threat model, its wrap-claude-only constraint, and its fail-closed posture all
+  stand — this changes *what builds the jail*, not *what the jail is for*.
+- **Context:** #92 asked whether `@anthropic-ai/sandbox-runtime` (SRT) should be #67's
+  mechanism. It was filed before #67 shipped, so the question is now retrospective: we have a
+  hand-rolled bwrap jail (ADR 0005) and a hand-rolled egress allowlist in flight (#74, PR #90).
+  Reviewing PR #90 forced the issue — it reimplements, in ~470 lines of bash + Python + an
+  nftables ruleset, a thing Anthropic ships as a supported package.
+
+## Verdict (#92's deliverable)
+
+- **Does SRT satisfy #67's confinement + tmux-attach + identity isolation on Linux?** Yes on
+  confinement and tmux. `srt <cmd>` wraps a single arbitrary process using the same bubblewrap
+  primitives ADR 0005 chose by hand, so the "wrap only `claude`, leave tmux and the human's
+  pane on the host" requirement is met unchanged — it is a command prefix, same seam. Identity
+  isolation is *partial*: SRT has no env-scrubbing key, so hgt keeps owning `--clearenv`'s job
+  (see residuals).
+- **Does it also cover #74?** Yes, and better than PR #90 does. One tool, both halves.
+- **Maturity/dependency risk?** Real but acceptable: `0.0.67`, Apache-2.0, published
+  2026-07-23, four runtime deps. Pre-1.0 with an explicit "configuration formats may evolve"
+  warning. Pin the version; the fallback (below) is cheap.
+- **Recommendation:** adopt. Close PR #90 unmerged.
+
+## Decision
+
+Replace hgt's hand-built bwrap argv with a pinned `@anthropic-ai/sandbox-runtime` invocation
+plus a generated settings file, covering **both** #67 (filesystem) and #74 (egress).
+
+```sh
+srt --settings <worktree>/.hgt/srt.json claude -n 'hgt/5-add-widget' '<prompt>'
+```
+
+```json
+{
+  "network":    { "allowedDomains": ["api.anthropic.com", "github.com"] },
+  "filesystem": {
+    "denyRead":   ["~/"],
+    "allowRead":  ["~/.nvm", "~/.local", "~/.gitconfig"],
+    "allowWrite": ["<worktree>", "<git-common-dir>", "~/.claude", "~/.claude.json", "/tmp"]
+  }
+}
+```
+
+`sandbox_argv` stops assembling thirty-odd bwrap flags and starts writing this file. The
+allowlist derivation (Anthropic API + the worktree's git remote) is the one piece of PR #90
+worth keeping.
+
+**The decision that actually matters is `--share-net` vs `--unshare-net`.** PR #90 keeps the
+host network namespace and therefore needs a cgroup scope plus a host nftables install to stop
+the agent ignoring `HTTPS_PROXY` and opening a raw socket. SRT drops the namespace and
+forwards loopback to its proxy over a unix socket, so a program that bypasses the proxy env
+vars gets **no network at all** rather than an unfiltered one. Fail-closed by construction,
+with no host firewall to install, no `systemd-run --scope`, and no polkit dependency. That
+single architectural difference deletes the entire enforcement layer PR #90 was building.
+
+## Why not the alternatives
+
+| Option | Boundary | Why not |
+| --- | --- | --- |
+| **Build here** (PR #90) | bwrap `--share-net` + own proxy + nftables/cgroup | Most code, most host setup, and the only option with a silent fail-open mode (see below) |
+| **DIY-lite** | own bwrap `--unshare-net` + `socat` → tinyproxy/squid | SRT's architecture, our maintenance. The documented fallback if SRT's pre-1.0 config churns |
+| **Firejail** | own netns + `--netfilter=<iptables-save>` | setuid-root binary with a CVE history; `--net` needs veth/root; filtering is IP-based, and the Anthropic API and GitHub sit behind rotating CDN addresses |
+| **Anthropic devcontainer** + `init-firewall.sh` | Docker, default-deny iptables + ipset | Needs Docker — ADR 0005 already rejected putting `carl` in the `docker` group (≈ root) as a poor trade for a security feature — and jails the whole session, breaking `tmux attach` into a host pane beside the agent |
+| **Third-party agent sandboxes** (agentbox, ClaudeBox, Docker Sandboxes, iron-proxy) | container-shaped | Same objections as the devcontainer. `iron-proxy` is a useful proxy *component*, not a boundary |
+| **systemd `IPAddressDeny=any`** | per-unit eBPF | Not a substitute: IP-based, same CDN problem. Only a belt under a proxy |
+| **Claude Code's built-in `/sandbox`** | Bash subprocesses only | MCP servers, hooks, and file tools run unconstrained on the host. A near-free second layer, not the boundary |
+| **VM / Claude Code on the web** | full OS | Out of scope for Phase 0 local execution |
+
+ADR 0005's wrap-claude-only constraint eliminates every container option in one stroke, and
+SRT is the only shipped product that wraps a *single arbitrary process* with both filesystem
+and hostname-based egress control. There is no third contender.
+
+## What PR #90 got wrong, and why that's evidence
+
+The review found the mechanism unvalidated in a way that argues for buying rather than
+building. `systemd-run` defaults to `--system`, which needs polkit auth on every launch; the
+obvious fix — adding `--user` — moves the scope to
+`/user.slice/user-1000.slice/user@1000.service/hgt-sandbox.slice/…`, so the ruleset's
+`socket cgroupv2 level 1 "hgt-sandbox.slice"` match silently stops matching and the jail runs
+unfiltered with the preflight still green. A security control with a silent fail-open mode is
+worse than the residual it closes. Separately, `/etc/nftables.d` is not included by Ubuntu's
+default `nftables.conf`, so the rule does not survive a reboot while the file-existence
+preflight keeps reporting "installed."
+
+That is not a criticism of the author so much as a measure of the surface: this is a lot of
+load-bearing systems plumbing to own for a Phase 0 harness whose actual product is issue-driven
+development.
+
+## What this deletes
+
+`templates/egress-proxy.py`, `templates/nftables/hgt-egress.nft`, the `systemd-run` scope
+wrapper, the egress pidfile lifecycle, the nftables preflight, and most of `sandbox_argv`'s
+bind list. Net host setup *decreases*: `socat` becomes a dependency, the nftables install goes
+away, and the Ubuntu AppArmor `bwrap` profile is still required (SRT uses bubblewrap too), so
+#72 survives unchanged.
+
+## Consequences / residuals
+
+- **Pre-1.0 dependency.** `0.0.67`, "research preview," config format may evolve. Pin an exact
+  version; treat an upgrade as a change that re-runs the conformance suite. The DIY-lite
+  fallback above stays documented precisely so this is reversible.
+- **SRT scrubs no environment variables.** Its settings schema covers network, filesystem, and
+  unix sockets — there is no equivalent of ADR 0005's `--clearenv` + curated allowlist. hgt
+  must keep doing that itself (`env -i` with the same `_SANDBOX_ENV_PASS` list) or a `GH_TOKEN`
+  exported in Carl's shell walks straight into the jail. This is the one place the hand-rolled
+  jail was strictly stronger.
+- **Filesystem reads default to allowed.** ADR 0005's tmpfs-`$HOME` is deny-by-default on
+  reads. Preserving that property requires explicit `denyRead: ["~/"]` plus `allowRead`
+  entries, and Linux SRT takes **literal paths only — no globs**. Config, not code, but it must
+  be got right or the jail is quietly more permissive than the one it replaces.
+- **Domain fronting is unsolved, here and everywhere.** SRT allowlists on the client-supplied
+  hostname without inspecting TLS — identical to PR #90's proxy. Allowing `github.com` still
+  leaves a general-purpose exfiltration channel; what keeps that honest is the jail holding no
+  admin `gh` credential (ADR 0005), not the allowlist. `network.tlsTerminate` exists but is
+  experimental and buys inspection, not filtering.
+- **The `~/.claude.json` credential is still readable** (ADR 0005's residual, unchanged) and
+  `~/.claude` still needs write access, so **#73 stands** — a minimal `CLAUDE_CONFIG_DIR` is
+  still its own slice, now expressed as `allowWrite` entries rather than bwrap binds.
+- **#75 changes shape.** Confining the `.git` bind becomes an `allowWrite`/`denyWrite` pair
+  instead of selective bwrap re-binds — likely simpler, still its own slice.
+- **Live validation is still deferred**, same as ADR 0005: bwrap can't create a userns on this
+  box until the AppArmor profile lands. SRT does not change that gate.
+- **ADR numbering:** PR #90 authored its ADR as 0006, which was already taken by the
+  review-response skill (#19, merged in PR #91). This is 0007.
