@@ -422,17 +422,21 @@ Build the widget.'
   run env HGT_SANDBOX_GITHUB_TOKEN=ghp_SEKRET "$HGT_BIN" work 5 --no-tmux
   [ "$status" -eq 0 ]
   local bw; bw=$(grep '^bwrap ' "$SHIM_LOG")
-  # gh bound read-only + its config dir bound + GH_CONFIG_DIR set so `gh pr create` authenticates
+  # config dir bound + GH_CONFIG_DIR set (the token file lives here); gh bound best-effort for PR
   [[ "$bw" == *"--ro-bind $(command -v gh) $(command -v gh)"* ]]
   [[ "$bw" == *"--setenv GH_CONFIG_DIR $TMP/cred/5-add-widget"* ]]
-  # git rewrites git@ -> https and delegates auth to gh, so `git push` uses ONLY this token
+  # git rewrites git@ -> https and its credential helper reads the token FILE (never gh) — a snap gh
+  # can't run in the jail and would take push down with it (#81 dogfooding), so push mustn't need it
   [[ "$bw" == *"url.https://github.com/.insteadOf"* ]]
   [[ "$bw" == *"credential.https://github.com.helper"* ]]
-  [[ "$bw" == *"!gh auth git-credential"* ]]
+  [[ "$bw" == *'cat "$GH_CONFIG_DIR/token"'* ]]
+  [[ "$bw" != *"gh auth git-credential"* ]]          # push path must not depend on gh
   [[ "$bw" == *"--setenv GIT_CONFIG_COUNT 3"* ]]
   # THE hygiene property: the token value appears NOWHERE in the argv hgt builds/echoes...
   ! grep -q 'ghp_SEKRET' "$SHIM_LOG"
-  # ...it lives only in the mode-600 hosts.yml gh reads
+  # ...it lives only in the mode-600 files gh (hosts.yml) and git (token) read
+  [ "$(cat "$TMP/cred/5-add-widget/token")" = ghp_SEKRET ]
+  [ "$(stat -c %a "$TMP/cred/5-add-widget/token")" = 600 ]
   grep -q 'oauth_token: ghp_SEKRET' "$TMP/cred/5-add-widget/hosts.yml"
   [ "$(stat -c %a "$TMP/cred/5-add-widget/hosts.yml")" = 600 ]
 }

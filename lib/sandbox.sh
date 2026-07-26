@@ -120,16 +120,18 @@ sandbox_argv() {
   # git config injected via the numbered GIT_CONFIG_* env (no ~/.gitconfig write needed). Always
   # force gpg-signing off — the jail has no ~/.gnupg, so the agent can't sign as Carl and its
   # commits are unsigned by design. With a scoped push token (#81) also rewrite git@ -> https and
-  # point git's credential helper at gh, so the jailed agent can push with ONLY that token — never
-  # Carl's ~/.ssh or admin gh. The token itself never lands here (see _sandbox_credential): it
-  # rides a bound gh config dir, so it stays out of the argv, the `run` echo, and the tmux pane.
+  # give git a credential helper that reads the token straight from the bound file, so the jailed
+  # agent can push with ONLY that token — never Carl's ~/.ssh or admin gh. Push deliberately does
+  # NOT go through gh: gh installed as a snap can't run in the jail (needs snapd/mounts absent
+  # here), which would take push down with it (dogfooded on #81). The token never lands in the
+  # argv/echo/pane — the helper reads $GH_CONFIG_DIR/token, so only that *path* is ever visible.
   local -a gitcfg=(commit.gpgsign false)
   if [ -n "${HGT_SANDBOX_GITHUB_TOKEN:-}" ]; then
     _sandbox_credential "$wt"
     HGT_SANDBOX_ARGV+=(--setenv GH_CONFIG_DIR "$_SANDBOX_GH_CONFIG_DIR")
     gitcfg+=(
       "url.https://github.com/.insteadOf" "git@github.com:"
-      "credential.https://github.com.helper" "!gh auth git-credential"
+      "credential.https://github.com.helper" '!f() { test "$1" = get && printf "username=x-access-token\npassword=%s\n" "$(cat "$GH_CONFIG_DIR/token")"; }; f'
     )
   fi
   HGT_SANDBOX_ARGV+=(--setenv GIT_CONFIG_COUNT "$(( ${#gitcfg[@]} / 2 ))")
@@ -146,18 +148,17 @@ sandbox_argv() {
 # _sandbox_credential WT — provision a jail-only GitHub credential from HGT_SANDBOX_GITHUB_TOKEN
 # (#81), the same seam for the attended and unattended paths (#17). The token must NOT ride an env
 # var: send-keys would type it straight into the visible tmux pane and `run` would echo it — a live
-# credential in scrollback/logs. So it rides a mode-700 gh config dir bound read-write into the jail
-# at the same path; only the *path* appears in the argv. gh reads it (GH_CONFIG_DIR) for `pr create`
-# and serves it to git as a credential helper for push. Sets _SANDBOX_GH_CONFIG_DIR (the bound path)
-# and appends the gh binary + config-dir binds to HGT_SANDBOX_ARGV. Writes a file — a launch-time
-# side effect, unlike the rest of this pure argv builder.
+# credential in scrollback/logs. So it rides a mode-700 dir bound read-write into the jail at the
+# same path; only the *path* appears in the argv. `token` (a plain file) is what git's credential
+# helper reads to push — no gh in that path. `hosts.yml` is the same token in gh's format, for
+# `gh pr create` where gh actually runs. Sets _SANDBOX_GH_CONFIG_DIR and appends the dir bind (+ gh
+# binary, best-effort) to HGT_SANDBOX_ARGV. Writes files — a launch-time side effect, unlike the
+# rest of this pure argv builder.
 #
 # NOTE (trust): a readable token + today's --share-net egress is exactly the exfil surface ADR 0005
 # flags as gated on #74. This seam is safe to use only while egress is trusted/constrained.
 _sandbox_credential() {
   local wt="$1" gh
-  gh=$(command -v gh) \
-    || die "sandbox: HGT_SANDBOX_GITHUB_TOKEN set but gh isn't on PATH — the jail needs it to push/PR with the token."
   # Per-worktree config dir on the host, mode 700, holding only the scoped token. Under a runtime
   # dir (not the worktree, which is bound rw and would surface it as untracked / risk a commit);
   # HGT_SANDBOX_CRED_DIR overrides (the suite points it inside its tmpdir).
@@ -166,16 +167,22 @@ _sandbox_credential() {
   # umask scoped to a subshell so it doesn't leak into the caller's later file writes.
   ( umask 077
     mkdir -p "$_SANDBOX_GH_CONFIG_DIR"
+    printf '%s' "$HGT_SANDBOX_GITHUB_TOKEN" >"$_SANDBOX_GH_CONFIG_DIR/token"
     cat >"$_SANDBOX_GH_CONFIG_DIR/hosts.yml" <<EOF
 github.com:
     oauth_token: $HGT_SANDBOX_GITHUB_TOKEN
     git_protocol: https
 EOF
   )
-  HGT_SANDBOX_ARGV+=(
-    --ro-bind "$gh" "$gh"
-    --bind "$_SANDBOX_GH_CONFIG_DIR" "$_SANDBOX_GH_CONFIG_DIR"
-  )
+  HGT_SANDBOX_ARGV+=(--bind "$_SANDBOX_GH_CONFIG_DIR" "$_SANDBOX_GH_CONFIG_DIR")
+  # gh is only for `gh pr create` — push reads the token file directly, so a missing/broken gh must
+  # never block it. Bind gh best-effort; skip a snap gh, which can't run in the jail (no snapd/mounts
+  # here) and would only spew errors. Warn so PR-from-jail isn't a silent mystery.
+  gh=$(command -v gh) || { warn "sandbox: gh not on PATH — jailed \`gh pr create\` unavailable (push still works via the token file)"; return 0; }
+  case "$gh" in
+    /snap/*) warn "sandbox: gh is a snap ($gh) — can't run in the jail, so \`gh pr create\` won't work there (push still works); install a non-snap gh for in-jail PRs"; return 0 ;;
+  esac
+  HGT_SANDBOX_ARGV+=(--ro-bind "$gh" "$gh")
 }
 
 # sandbox_credential_cleanup WT — remove the jail-only gh config dir (token) for worktree WT, if
