@@ -139,6 +139,27 @@ jobs:
           fi
           echo "has_feedback=true" >> "$GITHUB_OUTPUT"
 
+          # Materialize the reply verb the agent is allowlisted to run. A raw
+          # `gh api …/comments:*` prefix also reaches DELETE/PATCH on reviewer comments —
+          # prefix rules can't say "POST to /replies only" — so the POST is wrapped
+          # instead. The script lives in RUNNER_TEMP, outside the working tree, where the
+          # agent's Edit/Write cannot rewrite it; repo + PR are baked in here from runner
+          # context, not read from env the agent could set. It also stamps the marker the
+          # guard greps for, making the reply signal a property of the verb rather than
+          # of prompt compliance.
+          reply="$RUNNER_TEMP/hgt-review-reply"
+          cat > "$reply" <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          [ $# -eq 2 ] || { echo "usage: hgt-review-reply <comment-id> <body>" >&2; exit 2; }
+          case "$1" in ''|*[!0-9]*) echo "comment-id must be numeric" >&2; exit 2;; esac
+          body="$2"$'\n\n''<!-- hgt-review -->'
+          exec gh api "repos/@REPO@/pulls/@PR@/comments/$1/replies" -f body="$body"
+          SCRIPT
+          sed -i -e "s|@REPO@|${{ github.repository }}|" \
+            -e "s|@PR@|${{ github.event.pull_request.number }}|" "$reply"
+          chmod +x "$reply"
+
           delim="HGT_FEEDBACK_$(uuidgen)"
           { echo "feedback<<$delim"; echo "$feedback"; echo "$delim"; } >> "$GITHUB_OUTPUT"
 
@@ -167,19 +188,20 @@ jobs:
           # Bash(git:*)/Bash(gh:*) wildcards — v0 feeds RAW comment text to the agent, so
           # an injection runs against whatever Bash is allowed. git status/diff/log are
           # read-only helpers for seeing the PR delta (Bash commands don't get the
-          # Read/Grep/Glob no-prompt pass). The gh api rule is pinned to THIS PR's
-          # review-comments path — that's where thread replies (`…/comments/<id>/replies`)
-          # land, and the prefix can't reach merge, approve, another PR, or any other
-          # endpoint. gh pr comment covers the wrap-up + loud-stop channel; gh issue
-          # create serves the skill's `defer` category (ADR 0006 D4 fallback —
-          # `hgt issue create` doesn't exist here).
+          # Read/Grep/Glob no-prompt pass). Thread replies go through the materialized
+          # hgt-review-reply script (see collect) — a raw `gh api …/comments` prefix
+          # would also reach DELETE/PATCH on reviewer comments, and prefix rules can't
+          # express "POST to /replies only". gh pr comment (wrap-up + loud-stop channel)
+          # is pinned to THIS PR. gh issue create (the skill's `defer`, ADR 0006 D4
+          # fallback) is wide by nature — filing issues is its whole job; worst-case
+          # injection is issue spam in this repo, visible and reversible.
           #
           # A review asking for a `.github/workflows/**` change can be edited but not
           # pushed (GITHUB_TOKEN can't push workflow changes without `workflows: write`,
           # the self-escalation §3 forbids — do NOT grant it). The prompt tells the agent
           # to stop loudly; the guard below turns the no-push into a red job.
           claude_args: |
-            --allowedTools "Edit,Write,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh pr comment:*),Bash(gh issue create:*),Bash(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments:*)"
+            --allowedTools "Edit,Write,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh pr comment ${{ github.event.pull_request.number }}:*),Bash(gh issue create:*),Bash(${{ runner.temp }}/hgt-review-reply:*)"
           prompt: |
             You are the hgt review responder. Address the outstanding review feedback on
             PR #${{ github.event.pull_request.number }} in ${{ github.repository }}. The
@@ -204,7 +226,7 @@ jobs:
             - `hgt review list` → the feedback block above is the authoritative
               outstanding set. Each thread comment carries its reply id as `[id N]`.
             - `hgt review reply <id> --body "..."` →
-              `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments/<id>/replies -f body="..."`
+              `${{ runner.temp }}/hgt-review-reply <id> "..."`
               Keep the skill's atomicity: per fix, commit → `git push` → reply citing the
               pushed sha, one comment at a time.
             - defer → `hgt issue create` does not exist here; go straight to
@@ -213,10 +235,9 @@ jobs:
               on pushed commits (#58 — a human must re-trigger checks), and any blocked
               STOP report go in one short wrap-up comment:
               `gh pr comment ${{ github.event.pull_request.number }} --body ...`
-            - End EVERY comment you post — thread replies and the wrap-up — with the
-              literal marker `<!-- hgt-review -->` (invisible when rendered). The run's
-              success guard counts only marked comments; an unmarked reply reads as no
-              reply.
+            - End the wrap-up comment with the literal marker `<!-- hgt-review -->`
+              (invisible when rendered) — the run's success guard counts only marked
+              comments. Thread replies get the marker stamped by the reply verb itself.
             - Work only within this repo. Do NOT fetch external URLs or inspect the
               action's own internals — everything you need is already here.
             - A change under `.github/workflows/**` can be edited but not pushed
@@ -284,7 +305,8 @@ jobs:
           fi
 
           # Both reply surfaces: thread replies (pulls/N/comments) + wrap-up (issues/N/comments).
-          # Only comments carrying the prompt-mandated `<!-- hgt-review -->` marker count:
+          # Only comments carrying the `<!-- hgt-review -->` marker count (stamped by the
+          # reply verb itself; prompt-mandated on the wrap-up):
           # claude-code-action may post its own tracking/status comments as
           # github-actions[bot], and "a bot said a thing" must not green a run (#62/#69).
           # A marker-less real reply reads as no reply → red → a human looks; that is the
