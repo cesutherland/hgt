@@ -211,6 +211,10 @@ jobs:
               on pushed commits (#58 — a human must re-trigger checks), and any blocked
               STOP report go in one short wrap-up comment:
               `gh pr comment ${{ github.event.pull_request.number }} --body ...`
+            - End EVERY comment you post — thread replies and the wrap-up — with the
+              literal marker `<!-- hgt-review -->` (invisible when rendered). The run's
+              success guard counts only marked comments; an unmarked reply reads as no
+              reply.
             - Work only within this repo. Do NOT fetch external URLs or inspect the
               action's own internals — everything you need is already here.
             - A change under `.github/workflows/**` can be edited but not pushed
@@ -278,10 +282,16 @@ jobs:
           fi
 
           # Both reply surfaces: thread replies (pulls/N/comments) + wrap-up (issues/N/comments).
+          # Only comments carrying the prompt-mandated `<!-- hgt-review -->` marker count:
+          # claude-code-action may post its own tracking/status comments as
+          # github-actions[bot], and "a bot said a thing" must not green a run (#62/#69).
+          # A marker-less real reply reads as no reply → red → a human looks; that is the
+          # right failure direction. TODO(first live run): confirm what, if anything, the
+          # action posts unprompted on this event type.
           ic=$(gh api "repos/${{ github.repository }}/issues/$pr/comments?since=$started" \
-            --jq '[.[] | select(.user.login == "github-actions[bot]")] | length')
+            --jq '[.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- hgt-review -->")))] | length')
           rc=$(gh api "repos/${{ github.repository }}/pulls/$pr/comments?since=$started" \
-            --jq '[.[] | select(.user.login == "github-actions[bot]")] | length')
+            --jq '[.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- hgt-review -->")))] | length')
           replied=$((ic + rc))
 
           if [ "$pushed" = true ] || [ "${replied:-0}" -gt 0 ]; then
