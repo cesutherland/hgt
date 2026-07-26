@@ -17,8 +17,8 @@
   confinement and tmux. `srt <cmd>` wraps a single arbitrary process using the same bubblewrap
   primitives ADR 0005 chose by hand, so the "wrap only `claude`, leave tmux and the human's
   pane on the host" requirement is met unchanged — it is a command prefix, same seam. Identity
-  isolation is *partial*: SRT has no env-scrubbing key, so hgt keeps owning `--clearenv`'s job
-  (see residuals).
+  isolation is *partial*: SRT inherits the caller's full environment and offers only a
+  named-variable denylist, so hgt keeps owning `--clearenv`'s job (see residuals).
 - **Does it also cover #74?** Yes, and better than PR #90 does. One tool, both halves.
 - **Maturity/dependency risk?** Real but acceptable: `0.0.67`, Apache-2.0, published
   2026-07-23, four runtime deps. Pre-1.0 with an explicit "configuration formats may evolve"
@@ -103,11 +103,18 @@ away, and the Ubuntu AppArmor `bwrap` profile is still required (SRT uses bubble
 - **Pre-1.0 dependency.** `0.0.67`, "research preview," config format may evolve. Pin an exact
   version; treat an upgrade as a change that re-runs the conformance suite. The DIY-lite
   fallback above stays documented precisely so this is reversible.
-- **SRT scrubs no environment variables.** Its settings schema covers network, filesystem, and
-  unix sockets — there is no equivalent of ADR 0005's `--clearenv` + curated allowlist. hgt
-  must keep doing that itself (`env -i` with the same `_SANDBOX_ENV_PASS` list) or a `GH_TOKEN`
-  exported in Carl's shell walks straight into the jail. This is the one place the hand-rolled
-  jail was strictly stronger.
+- **SRT's env controls are a denylist; ADR 0005's were an allowlist.** SRT never emits
+  `--clearenv`, so the sandboxed child **inherits the full environment of whatever invoked
+  `srt`** (`dist/sandbox/linux-sandbox-utils.js`: "composes against the child's actual starting
+  env — `process.env` inherited, `unsetEnvVars` dropped, `setEnvVars` overlaid"). It does have a
+  `credentials.envVars` settings key, with `deny` (→ bwrap `--unsetenv`) and `mask` modes — but
+  you must name each variable. ADR 0005 cleared everything and named the survivors, which is
+  strictly stronger: you cannot forget to deny a variable you never knew was exported. hgt keeps
+  owning this — invoke `srt` from an `env -i` baseline carrying only `_SANDBOX_ENV_PASS`.
+- **`credentials.envVars` `mask` mode is worth revisiting for #81.** The jail sees a per-session
+  sentinel; SRT's proxy substitutes the real value on egress to declared `injectHosts`. That is
+  a better shape for the scoped push PAT than handing the jail a live token — it needs
+  `network.tlsTerminate`, so it's a later slice, not this one.
 - **Filesystem reads default to allowed.** ADR 0005's tmpfs-`$HOME` is deny-by-default on
   reads. Preserving that property requires explicit `denyRead: ["~/"]` plus `allowRead`
   entries, and Linux SRT takes **literal paths only — no globs**. Config, not code, but it must
