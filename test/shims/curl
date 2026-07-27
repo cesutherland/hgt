@@ -29,10 +29,18 @@ done
 printf 'curl %s %s\n' "$method" "$url" >>"${SHIM_LOG:?SHIM_LOG not set}"
 [ -n "$data" ] && printf 'curl-data %s\n' "$data" >>"$SHIM_LOG"
 
+# Plain `if`/`printf` rather than `${VAR:-{...}}`: a literal `{`/`}` inside a parameter
+# expansion's default value confuses bash's own brace matching for the expansion itself.
+default_pull_url='{"html_url":"https://github.com/cesutherland/hgt/pull/1"}'
 case "$method $url" in
-  GET*/pulls\?*)  printf '%s\n' "${SHIM_CURL_PULLS_OUT:-[]}" ;;
-  GET*)           printf '%s\n' "${SHIM_CURL_REPO_OUT:-{\"default_branch\":\"main\"}}" ;;
-  POST*)          printf '%s\n' "${SHIM_CURL_CREATE_OUT:-{\"html_url\":\"https://github.com/cesutherland/hgt/pull/1\"}}" ;;
-  PATCH*)         printf '%s\n' "${SHIM_CURL_UPDATE_OUT:-{\"html_url\":\"https://github.com/cesutherland/hgt/pull/1\"}}" ;;
+  GET*/pulls\?*)
+    printf '%s\n' "${SHIM_CURL_PULLS_OUT:-[]}" ;;
+  GET*)
+    if [ -n "${SHIM_CURL_REPO_OUT:-}" ]; then printf '%s\n' "$SHIM_CURL_REPO_OUT"
+    else printf '%s\n' '{"default_branch":"main"}'; fi ;;
+  POST*)
+    printf '%s\n' "${SHIM_CURL_CREATE_OUT:-$default_pull_url}" ;;
+  PATCH*)
+    printf '%s\n' "${SHIM_CURL_UPDATE_OUT:-$default_pull_url}" ;;
 esac
 exit "${SHIM_CURL_EXIT:-0}"
