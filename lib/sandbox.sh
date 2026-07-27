@@ -173,11 +173,11 @@ sandbox_argv() {
 _sandbox_check_token_scope() {
   local out scopes s deny=() broad=()
   command -v gh >/dev/null 2>&1 || {
-    warn "sandbox: gh not on PATH — couldn't verify HGT_SANDBOX_GITHUB_TOKEN's scopes; proceeding on trust. Publish (#81) assumes a narrowly scoped machine-user PAT (contents+PRs on this repo only) — an admin/broad token in the jail could let the agent merge or approve its own PR, bypassing the human-merge gate."
+    warn "sandbox: gh not on PATH — couldn't verify HGT_SANDBOX_GITHUB_TOKEN's scopes; proceeding on trust. ADR 0005 assumes a narrowly scoped machine-user PAT (contents+PRs on this repo only) — an admin/broad token in the jail could let the agent merge or approve its own PR, bypassing the human-merge gate (SPEC §3)."
     return 0
   }
   out=$(GH_TOKEN="$HGT_SANDBOX_GITHUB_TOKEN" GITHUB_TOKEN="$HGT_SANDBOX_GITHUB_TOKEN" gh api -i user 2>/dev/null) || {
-    warn "sandbox: couldn't probe HGT_SANDBOX_GITHUB_TOKEN's scopes (gh api call failed) — proceeding on trust. Publish (#81) assumes a narrowly scoped machine-user PAT (contents+PRs on this repo only) — an admin/broad token in the jail could let the agent merge or approve its own PR, bypassing the human-merge gate."
+    warn "sandbox: couldn't probe HGT_SANDBOX_GITHUB_TOKEN's scopes (gh api call failed) — proceeding on trust. ADR 0005 assumes a narrowly scoped machine-user PAT (contents+PRs on this repo only) — an admin/broad token in the jail could let the agent merge or approve its own PR, bypassing the human-merge gate (SPEC §3)."
     return 0
   }
   scopes=$(printf '%s' "$out" | grep -i '^x-oauth-scopes:' | head -1) || true
@@ -195,10 +195,10 @@ _sandbox_check_token_scope() {
   done
 
   if [ "${#deny[@]}" -gt 0 ]; then
-    die "sandbox: HGT_SANDBOX_GITHUB_TOKEN carries admin-level scope(s): ${deny[*]}. Publish (#81) assumes a narrowly scoped machine-user PAT (contents+PRs on this repo only); an admin token hands the jailed agent that power — it could merge or approve its own PR, or push straight to main, bypassing the human-merge gate (SPEC §3, #67/#81). Refusing to launch — mint a scoped/fine-grained PAT limited to Contents+PRs on this repo, or unset HGT_SANDBOX_GITHUB_TOKEN to fall back to no push credential."
+    die "sandbox: HGT_SANDBOX_GITHUB_TOKEN carries admin-level scope(s): ${deny[*]}. ADR 0005 assumes a narrowly scoped machine-user PAT (contents+PRs on this repo only); an admin token hands the jailed agent that power — it could merge or approve its own PR, or push straight to main, bypassing the human-merge gate (SPEC §3). Refusing to launch — mint a scoped/fine-grained PAT limited to Contents+PRs on this repo, or unset HGT_SANDBOX_GITHUB_TOKEN to fall back to no push credential."
   fi
   if [ "${#broad[@]}" -gt 0 ]; then
-    warn "sandbox: HGT_SANDBOX_GITHUB_TOKEN carries broader scope(s) than push/PR needs: ${broad[*]}. Publish (#81) assumes a narrowly scoped machine-user PAT (contents+PRs on this repo only); an over-scoped token hands the jailed agent that power — it could merge or approve its own PR, bypassing the human-merge gate (SPEC §3, #67/#81). Prefer a fine-grained PAT limited to Contents+PRs on this repo."
+    warn "sandbox: HGT_SANDBOX_GITHUB_TOKEN carries broader scope(s) than push/PR needs: ${broad[*]}. ADR 0005 assumes a narrowly scoped machine-user PAT (contents+PRs on this repo only); an over-scoped token hands the jailed agent that power — it could merge or approve its own PR, bypassing the human-merge gate (SPEC §3). Prefer a fine-grained PAT limited to Contents+PRs on this repo."
   fi
 }
 
