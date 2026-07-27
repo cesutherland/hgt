@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# hgt test shim — curl. Only `hgt pr open` (cmds/pr.sh) shells out to curl, always the same
+# shape: `curl -K - -fsS -X <METHOD> [-d <payload>] <url>`, with the bearer token fed on stdin
+# (never the argv — that's the thing under test). This shim drains that stdin unread (the token
+# never needs to reach $SHIM_LOG) and answers by METHOD + a coarse URL match, so one test can
+# script the probe-GET, the create-POST, and the update-PATCH independently.
+#
+# Records "curl <method> <url>" (+ "curl-data <payload>" when -d is given) to $SHIM_LOG. Honors:
+#   SHIM_CURL_PULLS_OUT   body for `GET .../pulls?...`        (default: [])
+#   SHIM_CURL_REPO_OUT    body for `GET .../repos/<slug>`     (default: {"default_branch":"main"})
+#   SHIM_CURL_CREATE_OUT  body for `POST .../pulls`           (default: a canned html_url)
+#   SHIM_CURL_UPDATE_OUT  body for `PATCH .../pulls/<n>`      (default: a canned html_url)
+#   SHIM_CURL_EXIT        exit code for every call            (default: 0)
+set -euo pipefail
+cat >/dev/null  # the `-K -` config (the header lines carrying the token) — unread, on purpose
+
+method=GET url="" data=""
+args=("$@")
+i=0
+while [ "$i" -lt "${#args[@]}" ]; do
+  case "${args[$i]}" in
+    -X) method="${args[$((i + 1))]}"; i=$((i + 2)) ;;
+    -d) data="${args[$((i + 1))]}"; i=$((i + 2)) ;;
+    https://*) url="${args[$i]}"; i=$((i + 1)) ;;
+    *) i=$((i + 1)) ;;
+  esac
+done
+
+printf 'curl %s %s\n' "$method" "$url" >>"${SHIM_LOG:?SHIM_LOG not set}"
+[ -n "$data" ] && printf 'curl-data %s\n' "$data" >>"$SHIM_LOG"
+
+case "$method $url" in
+  GET*/pulls\?*)  printf '%s\n' "${SHIM_CURL_PULLS_OUT:-[]}" ;;
+  GET*)           printf '%s\n' "${SHIM_CURL_REPO_OUT:-{\"default_branch\":\"main\"}}" ;;
+  POST*)          printf '%s\n' "${SHIM_CURL_CREATE_OUT:-{\"html_url\":\"https://github.com/cesutherland/hgt/pull/1\"}}" ;;
+  PATCH*)         printf '%s\n' "${SHIM_CURL_UPDATE_OUT:-{\"html_url\":\"https://github.com/cesutherland/hgt/pull/1\"}}" ;;
+esac
+exit "${SHIM_CURL_EXIT:-0}"

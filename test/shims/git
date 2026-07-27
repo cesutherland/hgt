@@ -47,8 +47,22 @@ if [ "${1:-}" = rev-parse ]; then
     case "$a" in
       --git-common-dir) printf '%s\n' "${SHIM_GIT_COMMON_DIR:-$PWD/.git}"; exit 0 ;;
       --show-toplevel) printf '%s\n' "$PWD"; exit 0 ;;
+      # `--abbrev-ref HEAD` — the current branch, behind `hgt pr open` (#97).
+      --abbrev-ref) printf '%s\n' "${SHIM_GIT_BRANCH:-testuser/5-add-widget}"; exit 0 ;;
     esac
   done
+fi
+
+# `remote get-url origin` — the forge remote parsed for owner/repo (`hgt pr open`, #97).
+if [ "${1:-}" = remote ] && [ "${2:-}" = get-url ]; then
+  printf '%s\n' "${SHIM_GIT_REMOTE:-git@github.com:cesutherland/hgt.git}"
+  exit 0
+fi
+
+# `log -1 --format=%s` — the latest commit subject, the PR's default title (#97).
+if [ "${1:-}" = log ]; then
+  printf '%s\n' "${SHIM_GIT_LOG_OUT:-seed commit}"
+  exit 0
 fi
 
 # `show-ref --verify --quiet refs/heads/<branch>` — hgt's branch-existence probe that decides

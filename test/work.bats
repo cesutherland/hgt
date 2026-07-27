@@ -547,8 +547,9 @@ Build the widget.'
   [[ "$bw" != *"gh auth git-credential"* ]]          # push path must not depend on gh
   [[ "$bw" != *"GH_CONFIG_DIR"* ]]                   # no gh config dir anymore
   [[ "$bw" == *"--setenv GIT_CONFIG_COUNT 4"* ]]     # gpgsign + url + helper-reset + host-helper
-  # gh still bound best-effort for `gh pr create`
-  [[ "$bw" == *"--ro-bind $(command -v gh) $(command -v gh)"* ]]
+  # gh is gone from the credential seam entirely (#97): no binary bind, no GH_TOKEN, no hosts.yml
+  [[ "$bw" != *"--ro-bind $(command -v gh) $(command -v gh)"* ]]
+  [[ "$bw" != *"/gh "* ]]
   # the token value appears NOWHERE hgt builds/echoes...
   ! grep -q 'ghp_SEKRET' "$SHIM_LOG"
   # ...and the inline launch opened+unlinked the payload: no persistent on-disk secret (#2)
@@ -575,4 +576,6 @@ Build the widget.'
   [ "$(stat -c %a "$f")" = 600 ]
   tr '\0' '\n' <"$f" | grep -qx 'GITHUB_TOKEN'
   tr '\0' '\n' <"$f" | grep -qx 'ghp_SEKRET'
+  # only the token, nothing gh-shaped (#97): the payload is just what git's helper needs
+  ! tr '\0' '\n' <"$f" | grep -qx 'GH_TOKEN'
 }

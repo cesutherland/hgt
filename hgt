@@ -32,6 +32,7 @@ commands:
   init     scaffold hgt into the current repo (idempotent)
   issue    manage the issue queue           (not implemented yet)
   work     local worktree + Claude session for issue <n>
+  pr       open/update a pull request, gh-free (for use inside the sandbox)
 
 options:
   -h, --help     show this help
@@ -50,6 +51,7 @@ main() {
     init)  source "$HGT_ROOT/cmds/init.sh";  cmd_init  "$@" ;;
     issue) source "$HGT_ROOT/cmds/issue.sh"; cmd_issue "$@" ;;
     work)  source "$HGT_ROOT/cmds/work.sh";  cmd_work  "$@" ;;
+    pr)    source "$HGT_ROOT/cmds/pr.sh";    cmd_pr    "$@" ;;
     *)     die "unknown command: $cmd (try 'hgt --help')" ;;
   esac
 }
