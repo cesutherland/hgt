@@ -125,6 +125,12 @@ behaviour the spike could only guess at. Re-run these when the pin moves.
   byte-for-byte. Had it been the backslash style, `\`+newline would be a line continuation and
   the newline would vanish. The conformance suite cannot catch this (its `srt` shim just
   `exec`s), which is the sharpest argument for enforcing the pin rather than warning about it.
+- **There is no `--bind-try` equivalent.** ADR 0005 bound optional deps with `--ro-bind-try` /
+  `--bind-try`, so an absent `~/.gitconfig.local` was silently skipped. SRT passes settings paths
+  to bwrap verbatim, and a missing one aborts the launch outright ("Can't bind mount ...: No such
+  file or directory"). `lib/sandbox.sh` filters every optional path through `_sandbox_extant`
+  first. Found by running the generated settings through the real srt; the conformance suite
+  could not have caught it, since the shim never binds anything.
 - **`srt --version` is useless**: it prints `process.env.npm_package_version || '1.0.0'`, so
   outside an npm lifecycle script it always says `1.0.0`. The pin check resolves the bin through
   its symlink and walks up to the package manifest instead.
@@ -133,6 +139,11 @@ behaviour the spike could only guess at. Re-run these when the pin moves.
 - **The allowlist enforces.** An unlisted host fails to connect; `api.anthropic.com` returns
   its normal 401. `strictAllowlist: true` is set so an unlisted host is denied outright instead
   of being referred to an ask-callback, which in a detached tmux pane would hang or auto-allow.
+
+The generated settings file was then run through real `srt` end to end. Every boundary holds:
+writes land in the worktree, the jail cannot rewrite its own policy or the shared `.git/config`,
+`~/.bashrc` is unreadable, `example.com` is blocked while `api.anthropic.com` (401) and
+`github.com` (200) are reachable.
 
 Two decisions departed from the sketch in the Decision section:
 
