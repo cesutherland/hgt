@@ -9,6 +9,9 @@ load helper
 
   diff "$TMP/CLAUDE.md"             "$HGT_REPO/templates/CLAUDE.md"
   diff "$TMP/.worktreeinclude"      "$HGT_REPO/templates/.worktreeinclude"
+  # keeps the per-launch jail policy + scratch dir out of git (#95); without it every worktree
+  # reads as dirty and `hgt work rm` refuses to tear it down
+  diff "$TMP/.hgt/.gitignore"       "$HGT_REPO/templates/hgt-gitignore"
   diff "$TMP/.hgt/hooks/normalize"  "$HGT_REPO/templates/hooks/normalize"
   [ -x "$TMP/.hgt/hooks/normalize" ]
   diff "$TMP/.claude/skills/review-response/SKILL.md" \
@@ -43,7 +46,7 @@ load helper
   run "$HGT_BIN" init
   [ "$status" -eq 0 ]
   [[ "$output" == *"skip   CLAUDE.md (exists)"* ]]
-  [[ "$output" == *"0 created, 4 skipped"* ]]
+  [[ "$output" == *"0 created, 5 skipped"* ]]
 }
 
 @test "init never clobbers a user's edits" {

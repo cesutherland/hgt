@@ -1,0 +1,6 @@
+{
+  "name": "@anthropic-ai/sandbox-runtime",
+  "version": "0.0.67",
+  "bin": { "srt": "dist/cli.js" },
+  "_comment": "Fixture, not a dependency. lib/sandbox.sh reads the installed SRT's version by resolving `srt` through its symlink and walking up to the package.json — `srt --version` reports 1.0.0 regardless of the release. This mirrors npm's global layout (<prefix>/lib/node_modules/<pkg>/dist/cli.js) so the suite exercises that walk instead of stubbing it."
+}
