@@ -163,7 +163,11 @@ hgt work <n>             # local execution: worktree + Claude session for issue 
 - **publish boundary (#81):** the sandboxed session holds no push credential by default;
   `HGT_SANDBOX_GITHUB_TOKEN` (a scoped machine-user PAT, delivered as jail env via
   `bwrap --args <fd>` — never on the argv/pane/cmdline, no persistent on-disk file) opts in a
-  push/PR path, the same seam attended + unattended. Gated on egress (#74).
+  push/PR path, the same seam attended + unattended. Gated on egress (#74). The "scoped" part is
+  a probed assumption, not enforced against the forge: `hgt work` checks the token's
+  `X-OAuth-Scopes` before launch and warns (fail-closed on clearly-admin scopes) if it looks
+  broader than push/PR needs (#98) — an admin/broad token would otherwise hand the jailed agent
+  the power to bypass the human-merge gate this section exists to hold.
 - respect branch stacking: default `--worktree` bases off `origin/HEAD`, which breaks
   stacks — use `worktree.baseRef: "head"` or fall back to manual
   `git worktree add -b <branch> <base>` for stacked work.

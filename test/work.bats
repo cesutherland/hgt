@@ -576,3 +576,54 @@ Build the widget.'
   tr '\0' '\n' <"$f" | grep -qx 'GITHUB_TOKEN'
   tr '\0' '\n' <"$f" | grep -qx 'ghp_SEKRET'
 }
+
+# --- token scope guard (#98) -------------------------------------------------------------------
+# #81 verified the merge gate against branch protection, never against the token itself — an
+# admin/broad HGT_SANDBOX_GITHUB_TOKEN was consumed byte-identically to a narrow one. These pin
+# the probe: warn (or refuse) BEFORE the jail launches, and stay silent for a correctly-scoped
+# token so the common case makes no noise.
+
+@test "publish: an admin-scoped token refuses to launch the jail (fail closed, #98)" {
+  work_env
+  export HGT_SANDBOX_CRED_DIR="$TMP/cred"
+  run env HGT_SANDBOX_GITHUB_TOKEN=ghp_ADMIN SHIM_GH_SCOPES='repo, admin:org' "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"admin"* ]]
+  [[ "$output" == *"machine-user PAT"* ]]        # names the assumption
+  [[ "$output" == *"merge"* ]]                   # names the risk
+  ! grep -q '^bwrap ' "$SHIM_LOG"                # refused before the jail ever launches
+  ! grep -q '^claude ' "$SHIM_LOG"
+}
+
+@test "publish: a broad classic-scoped token warns but still launches (#98)" {
+  work_env
+  export HGT_SANDBOX_CRED_DIR="$TMP/cred"
+  run env HGT_SANDBOX_GITHUB_TOKEN=ghp_BROAD SHIM_GH_SCOPES='repo, workflow' "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"warn:"* ]]
+  [[ "$output" == *"repo"* ]]
+  [[ "$output" == *"workflow"* ]]
+  [[ "$output" == *"machine-user PAT"* ]]        # names the assumption
+  [[ "$output" == *"merge"* ]]                   # names the risk
+  grep -q '^bwrap ' "$SHIM_LOG"                  # warning is not a gate here
+}
+
+@test "publish: a correctly fine-grained-scoped token launches without noise (#98)" {
+  work_env
+  export HGT_SANDBOX_CRED_DIR="$TMP/cred"
+  # no SHIM_GH_SCOPES set -> shim omits X-OAuth-Scopes, modeling a fine-grained PAT (no classic
+  # scopes to read at all)
+  run env HGT_SANDBOX_GITHUB_TOKEN=ghp_SCOPED "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"warn: sandbox: HGT_SANDBOX_GITHUB_TOKEN"* ]]
+  grep -q '^bwrap ' "$SHIM_LOG"
+}
+
+@test "publish: scope probe failure warns but does not block launch (#98)" {
+  work_env
+  export HGT_SANDBOX_CRED_DIR="$TMP/cred"
+  run env HGT_SANDBOX_GITHUB_TOKEN=ghp_BAD SHIM_GH_SCOPES_EXIT=1 "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"couldn't probe"* ]]
+  grep -q '^bwrap ' "$SHIM_LOG"
+}
