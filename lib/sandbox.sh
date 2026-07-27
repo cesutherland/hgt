@@ -190,7 +190,7 @@ _sandbox_check_token_scope() {
     s="${s# }"
     case "$s" in
       admin:*|delete_repo) deny+=("$s") ;;
-      repo|workflow) broad+=("$s") ;;
+      repo|workflow|public_repo) broad+=("$s") ;;
     esac
   done
 

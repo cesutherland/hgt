@@ -611,6 +611,18 @@ Build the widget.'
   grep -q '^bwrap --die-with-parent ' "$SHIM_LOG"  # warning is not a gate: the jail still launches
 }
 
+@test "publish: a public_repo-scoped token warns on a public repo (#98)" {
+  work_env
+  export HGT_SANDBOX_CRED_DIR="$TMP/cred"
+  # public_repo grants full push/PR/collaborator power on public repos — this repo is public, so
+  # it's as capable as `repo` here even though it reads as the "narrow" classic scope.
+  run env HGT_SANDBOX_GITHUB_TOKEN=ghp_PUBLIC SHIM_GH_SCOPES='public_repo' "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"warn:"* ]]
+  [[ "$output" == *"public_repo"* ]]
+  grep -q '^bwrap --die-with-parent ' "$SHIM_LOG"  # warning is not a gate: the jail still launches
+}
+
 @test "publish: a correctly fine-grained-scoped token launches without noise (#98)" {
   work_env
   export HGT_SANDBOX_CRED_DIR="$TMP/cred"
