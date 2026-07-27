@@ -1,0 +1,6 @@
+# Generated per launch by `hgt work` — the sandbox's own policy and the jail's private temp dir
+# (ADR 0007). Untracked by design: the agent must never be able to commit a change to its own
+# jail, and an untracked file here would make every worktree read as dirty, which makes
+# `hgt work rm` refuse to tear it down.
+srt.json
+tmp/
