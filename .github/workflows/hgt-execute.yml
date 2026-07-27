@@ -5,13 +5,24 @@
 #
 #   - Only `ready`-labeled issues are ever picked up (the trust boundary). The label is a
 #     human act; the ruleset keeps that human as the merge gate.
-#   - permissions is the narrow pair the action needs and NOTHING more. No `id-token: write`
-#     (never mint the OIDC token unless we federate to a cloud — one less exfil target).
-#     Auth accepts either a Claude subscription OAuth token or an API key; whichever secret
-#     is set is used (OAuth wins if both are). Neither needs OIDC — but without an explicit
-#     `github_token`, claude-code-action falls back to its GitHub App path, which DOES mint
-#     an OIDC token and needs `id-token: write`. Passing the workflow's own GITHUB_TOKEN
-#     skips that App/OIDC path entirely. Do not remove it; that's how #57/#13 stay closed.
+#   - Writes come from a MACHINE USER, not `github-actions` (#79). `github_token` is a scoped
+#     classic PAT (`public_repo` + `workflow`) held by a write-access collaborator that is
+#     neither `github-actions` nor Carl. Two things fall out: the PR is authored by a real
+#     account, so `on: pull_request` CI actually fires on executor PRs (#58), and "Allow
+#     GitHub Actions to create and approve pull requests" goes back OFF as §3 mandates —
+#     nothing here needs it. Carl stays a clean third-party reviewer (#68/#60), and no Actions
+#     identity can approve (author≠reviewer 422 never even comes up now).
+#   - The ambient GITHUB_TOKEN is demoted to READ-ONLY. Every write flows through the PAT, so
+#     the workflow token has nothing left to grant; the guard step only reads. No `id-token:
+#     write` (never mint the OIDC token unless we federate to a cloud — one less exfil
+#     target); passing any explicit `github_token` also skips claude-code-action's App/OIDC
+#     path, which is how #57/#13 stay closed. Auth accepts either a Claude subscription OAuth
+#     token or an API key; whichever secret is set is used (OAuth wins if both are).
+#   - §3 tradeoff, stated plainly: unlike GITHUB_TOKEN the PAT outlives the job, and checkout
+#     persists it in the workspace `.git/config` where the agent can read it. Containment is
+#     the narrow scope, not secrecy — push branches and open PRs; `public_repo` cannot reach
+#     private repos; it cannot merge and cannot approve; branch protection still owns `main`.
+#     A GitHub App with short-lived install tokens is the cleaner endgame (#56/#68).
 #   - The action is pinned to a commit SHA for v1.0.179 (≥ v1.0.94, the auth-bypass fix).
 #   - `main` is untouchable: the executor pushes a feature branch and opens a PR; branch
 #     protection rejects direct writes to `main` and forbids Actions from approving PRs.
@@ -32,9 +43,15 @@ on:
     types: [labeled]
 
 # Gate to the trust-boundary label. Any other label is a no-op.
+#
+# Read-only since #79: the machine-user PAT does every write (push, PR), so the ambient
+# workflow token needs no grant beyond what the fail-loud guard reads. `issues`/
+# `pull-requests` read are named explicitly rather than inherited — the guard's GraphQL
+# query is the only consumer.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+  issues: read
+  pull-requests: read
 
 concurrency:
   group: hgt-execute-${{ github.event.issue.number }}
@@ -46,11 +63,29 @@ jobs:
     if: github.event.label.name == 'ready'
     runs-on: ubuntu-latest
     steps:
+      # Fail loud and early when the machine-user PAT is missing. Without it checkout persists
+      # the ambient (now read-only) token, the agent's push dies mid-run, and the failure
+      # surfaces only as "no PR" for someone to spelunk out of a transcript. Name the cause.
+      - name: Preflight — machine-user token must be present
+        env:
+          MACHINE_TOKEN: ${{ secrets.HGT_MACHINE_USER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MACHINE_TOKEN:-}" ]; then
+            echo "::error::secrets.HGT_MACHINE_USER_TOKEN is unset. Since #79 the executor pushes and opens PRs as the machine user; set that repo secret to the scoped classic PAT (public_repo + workflow)."
+            exit 1
+          fi
+
       # Full history so the action can branch off `main` cleanly. Pinned to match ci.yml.
+      #
+      # `token:` is not decoration: checkout persists it as the workspace push credential, so
+      # omitting it would push as `github-actions` and quietly undo #79 with every other knob
+      # still looking right.
       - name: Check out the repo
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
+          token: ${{ secrets.HGT_MACHINE_USER_TOKEN }}
 
       # Providing `prompt` runs the action in autonomous agent mode — no @claude mention.
       # Pinned to a commit SHA (§3: pin actions; don't drift). Comment names the tag.
@@ -58,7 +93,7 @@ jobs:
         id: execute
         uses: anthropics/claude-code-action@b76a0776ae74036e77cd11018083743453d7ad35 # v1.0.179
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ secrets.HGT_MACHINE_USER_TOKEN }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # allowedTools REPLACES the default policy — it is not additive. #61 listed only
@@ -74,10 +109,12 @@ jobs:
           # working tree (the runner sandbox blocks writes outside it), and branch protection
           # + human review are the real containment; this allowlist is defense-in-depth.
           #
-          # Note: a task that needs to edit `.github/workflows/**` will now edit fine but
-          # FAIL at `git push` — GITHUB_TOKEN can't push workflow changes without
-          # `workflows: write`, the self-escalation §3 forbids. That surfaces as no PR, which
-          # the fail-loud guard below turns into a red job (don't grant workflows: write).
+          # Since #79 a `.github/workflows/**` edit also PUSHES: the machine-user PAT carries
+          # `workflow` scope, which GITHUB_TOKEN could never have without the `workflows:
+          # write` grant §3 forbids. That is not the same escalation: `issues` events run this
+          # file from the default branch, ci.yml is powerless, and nothing on a PR branch takes
+          # effect until a human merges it. The prompt makes the executor flag such changes so
+          # the reviewer reads them closely — human merge is still the gate.
           claude_args: |
             --allowedTools "Edit,Write,Bash(git checkout:*),Bash(git branch:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh pr create:*)"
           prompt: |
@@ -99,10 +136,11 @@ jobs:
             - Do NOT merge. A human reviews and merges — green is necessary, not sufficient.
             - Work only within this repo. Do NOT fetch external URLs or inspect the action's
               own internals — everything you need is already here.
-            - If a required change is blocked (e.g. editing `.github/workflows/**`, which
-              you can edit but cannot push — `workflows: write` is withheld by design), STOP
-              and say so plainly. Do NOT open a PR that lacks the change; a green run with no
-              real PR is the exact failure this loop is trying to kill.
+            - If a required change is blocked, STOP and say so plainly. Do NOT open a PR that
+              lacks the change; a green run with no real PR is the exact failure this loop is
+              trying to kill.
+            - If your change touches `.github/workflows/**`, say so in the PR body. It pushes
+              fine, and it gets a closer human read.
 
       # Observability (#64): capture the full Claude transcript — the stream-json log of
       # every turn, tool_use, tool_result, and denial. Run stats (num_turns, cost,
@@ -138,8 +176,10 @@ jobs:
       # when the execute step itself errored.
       #
       # When there IS no PR, it checks the transcript for any op touching
-      # `.github/workflows/**` and, if found, names the specific reason (editable but not
-      # pushable — workflows: write withheld, §3) so nobody has to spelunk the artifact.
+      # `.github/workflows/**` and, if found, names the likeliest cause so nobody has to
+      # spelunk the artifact. Post-#79 that cause flipped: workflow pushes are supposed to
+      # work now, so a workflow-touching run with no PR points at the PAT's `workflow` scope
+      # having gone missing (classic PATs lose scopes on regeneration) rather than at policy.
       - name: Guard — require a PR before calling this green
         if: always()
         env:
@@ -190,7 +230,7 @@ jobs:
                   or ((.n == "Bash") and (.cmd | test("\\.github/workflows/")) and (.cmd | test("git push|>|>>|tee |sed -i")))
                 ) ] | length' "$exec_file" 2>/dev/null || echo 0)
             if [ "${wf:-0}" -gt 0 ]; then
-              echo "::error::Issue #$issue needs to change a file under .github/workflows/, which the executor can edit but cannot push (workflows: write withheld by design, §3). Route it to a human/local session — do not grant the executor workflow write."
+              echo "::error::Issue #$issue produced no PR and the run touched .github/workflows/. Since #79 that push should succeed — check that HGT_MACHINE_USER_TOKEN still carries the 'workflow' scope (classic PATs drop scopes on regeneration) before looking elsewhere. Transcript artifact has the rest."
               exit 1
             fi
           fi
