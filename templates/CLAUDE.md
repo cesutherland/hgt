@@ -3,12 +3,12 @@
 **hgt** is an issue-driven development harness. GitHub Issues are the work queue. You (the
 human) hold exactly three seats, and nothing else:
 
-- **Mayor** — what's worth doing, and in what order.
-- **Witness** — is the result correct.
-- **Deacon** — is it safe to land.
+- **Mayor** — what's worth doing, in what order; sling it.
+- **Witness** — keep it moving: unstick runs, answer `needs-human`.
+- **Judge** — is it right, does it land: review the PR, approve the merge.
 
 Agents do the work in between. This is a paved road with a human at both ends — scoping and
-review — not an autonomous swarm. Nothing auto-merges; green CI is necessary, not sufficient.
+judging — not an autonomous swarm. Nothing auto-merges; green CI is necessary, not sufficient.
 
 ## The `ready` trust boundary
 
