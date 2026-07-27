@@ -135,7 +135,12 @@ sandbox_argv() {
     HGT_SANDBOX_ARGV+=(--args 3)  # fd 3 injects `--setenv GITHUB_TOKEN <tok>` etc.; launch opens it
     gitcfg+=(
       "url.https://github.com/.insteadOf" "git@github.com:"
-      "credential.https://github.com.helper" '!f() { test "$1" = get && printf "username=x-access-token\npassword=%s\n" "$GITHUB_TOKEN"; }; f'
+      # Empty reset first: clears any credential.helper inherited from the ro-bound ~/.gitconfig, so
+      # only ours is consulted (git tries helpers in list order). Then the env-reading helper: `get`
+      # emits the token, and it exits 0 on git's follow-up `store`/`erase` calls (bare `&&` would
+      # exit non-zero on a non-get op and make git grumble).
+      "credential.helper" ""
+      "credential.https://github.com.helper" '!f() { test "$1" = get && printf "username=x-access-token\npassword=%s\n" "$GITHUB_TOKEN"; true; }; f'
     )
   fi
   HGT_SANDBOX_ARGV+=(--setenv GIT_CONFIG_COUNT "$(( ${#gitcfg[@]} / 2 ))")
@@ -168,8 +173,13 @@ _sandbox_credential() {
   # else $TMPDIR / /tmp. HGT_SANDBOX_CRED_DIR overrides (the suite points it inside its tmpdir).
   local base="${HGT_SANDBOX_CRED_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}}"
   ( umask 077; mkdir -p "$base" )
+  # Reaper: launch unlinks the payload, but if a launch dies before its pane gets there (tmux/
+  # send-keys fails, pane exits early, user Ctrl-Cs) the file is stranded with no cleaner — an EXIT
+  # trap in hgt would race the pane. Sweep payloads older than 5 min at the next launch instead.
+  find "$base" -maxdepth 1 -name 'hgt-args.*' -mmin +5 -delete 2>/dev/null || true
   # mktemp: O_EXCL + unpredictable name + mode 600 — no symlink / pre-create attack even on a shared
-  # base (#1). Holds the token only until launch opens+unlinks it (#2).
+  # base (#1). Holds the token on disk only from here until launch opens+unlinks it: microseconds on
+  # the inline path, tmux+shell-startup on the tmux path — brief, owner-only, tmpfs under XDG (#2).
   _SANDBOX_ARGS_FILE=$(umask 077; mktemp "$base/hgt-args.XXXXXX") \
     || die "sandbox: couldn't stage the credential payload under $base"
   # NUL-separated bwrap args, injected where `--args 3` sits: set the scoped token as jail env.

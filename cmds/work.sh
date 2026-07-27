@@ -168,7 +168,6 @@ _prepare_sandbox() {
   HGT_SANDBOX_ARGV=()
   _SANDBOX_SQ=""
   _SANDBOX_ARGS_FILE=""
-  _SANDBOX_FD_PREFIX=""
   if ! sandbox_enabled; then
     warn "sandbox: disabled — launching the agent UNCONFINED (full FS + credential access, #67)"
     return 0
@@ -176,13 +175,6 @@ _prepare_sandbox() {
   sandbox_preflight
   sandbox_argv "$wt"
   for a in "${HGT_SANDBOX_ARGV[@]}"; do _SANDBOX_SQ+="$(_shq "$a") "; done
-  # Credential seam (#81): when a scoped token is staged, both launch paths must open its payload on
-  # fd 3 and unlink it before bwrap reads `--args 3`. This prefix does it in the pane shell — dash-safe
-  # (plain `exec 3< file`, no process substitution); the inline path does the equivalent in-process.
-  # The payload path is not a secret; the token is inside the file, gone the moment it's opened.
-  if [ -n "${_SANDBOX_ARGS_FILE:-}" ]; then
-    _SANDBOX_FD_PREFIX="exec 3< $(_shq "$_SANDBOX_ARGS_FILE"); rm -f $(_shq "$_SANDBOX_ARGS_FILE"); "
-  fi
 }
 
 # launch_session N WT [TMUX] — the launcher seam (spec §4/§5). Default (TMUX=1): run the named
@@ -212,12 +204,15 @@ launch_session() {
     # target; Kubuntu ships 5.x) — it'd trip on 3.2/4.3 if hgt ever claims broader portability.
     (
       cd "$wt"
-      # #81: open the token payload on fd 3 (for bwrap --args) and unlink it before launch, so the
-      # secret lives on disk for microseconds and only in the child's environ thereafter.
       if [ -n "${_SANDBOX_ARGS_FILE:-}" ]; then
-        exec 3<"$_SANDBOX_ARGS_FILE"; rm -f "$_SANDBOX_ARGS_FILE"
+        # #81: fd 3 carries the token payload for `bwrap --args 3`. Scope the redirect to the command
+        # GROUP (not `exec` into the shell) so fd 3 closes when claude exits — never left open in this
+        # shell where `cat /proc/self/fd/3` would reprint the PAT. rm inside: the group's redirect has
+        # already opened the fd, so unlinking now leaves bwrap reading an anonymous inode.
+        { rm -f "$_SANDBOX_ARGS_FILE"; run "${HGT_SANDBOX_ARGV[@]}" claude -n "$name" "$prompt"; } 3<"$_SANDBOX_ARGS_FILE"
+      else
+        run "${HGT_SANDBOX_ARGV[@]}" claude -n "$name" "$prompt"
       fi
-      run "${HGT_SANDBOX_ARGV[@]}" claude -n "$name" "$prompt"
     )
     return
   fi
@@ -251,7 +246,14 @@ launch_session() {
     # that. (Verified against real tmux, not just an sh -c parse — see PR #49.)
     _prepare_sandbox "$wt"
     run tmux new-session -d -s "$name" -c "$wt"
-    run tmux send-keys -t "$name" "${_SANDBOX_FD_PREFIX}${_SANDBOX_SQ}claude -n $(_shq "$name") $(_shq "$prompt")" Enter
+    local launch="${_SANDBOX_SQ}claude -n $(_shq "$name") $(_shq "$prompt")"
+    # #81: with a scoped token, wrap the launch in a command GROUP that opens the payload on fd 3 for
+    # `bwrap --args 3` and unlinks it — the `3< <file>` on the group closes the fd when claude exits,
+    # so it's never left readable in the pane shell (unlike `exec 3<`). dash-safe (no process sub).
+    if [ -n "${_SANDBOX_ARGS_FILE:-}" ]; then
+      launch="{ rm -f $(_shq "$_SANDBOX_ARGS_FILE"); ${launch}; } 3< $(_shq "$_SANDBOX_ARGS_FILE")"
+    fi
+    run tmux send-keys -t "$name" "$launch" Enter
     run tmux split-window -h -t "$name" -c "$wt"
     run tmux select-pane -t "$name" -L
   fi

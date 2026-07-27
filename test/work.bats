@@ -430,9 +430,10 @@ Build the widget.'
   # git rewrites git@ -> https and its helper reads $GITHUB_TOKEN from env — no gh, no on-disk file
   [[ "$bw" == *"url.https://github.com/.insteadOf"* ]]
   [[ "$bw" == *'"$GITHUB_TOKEN"'* ]]                 # helper pulls the env var
+  [[ "$bw" == *"credential.helper"* ]]               # empty reset clears any inherited helper
   [[ "$bw" != *"gh auth git-credential"* ]]          # push path must not depend on gh
   [[ "$bw" != *"GH_CONFIG_DIR"* ]]                   # no gh config dir anymore
-  [[ "$bw" == *"--setenv GIT_CONFIG_COUNT 3"* ]]
+  [[ "$bw" == *"--setenv GIT_CONFIG_COUNT 4"* ]]     # gpgsign + url + helper-reset + host-helper
   # gh still bound best-effort for `gh pr create`
   [[ "$bw" == *"--ro-bind $(command -v gh) $(command -v gh)"* ]]
   # the token value appears NOWHERE hgt builds/echoes...
@@ -447,9 +448,11 @@ Build the widget.'
   run env HGT_SANDBOX_GITHUB_TOKEN=ghp_SEKRET "$HGT_BIN" work 5
   [ "$status" -eq 0 ]
   local sk; sk=$(grep '^tmux send-keys' "$SHIM_LOG")
-  # the pane opens fd 3 from the payload and unlinks it, then bwrap reads it via --args 3
-  [[ "$sk" == *"exec 3< "* ]]
-  [[ "$sk" == *"rm -f "* ]]
+  # the launch is wrapped in a command group: `{ rm -f <payload>; <bwrap…>; } 3< <payload>` — fd 3
+  # feeds bwrap --args 3 and closes when claude exits (not left open in the pane via `exec 3<`)
+  [[ "$sk" == *"{ rm -f "* ]]
+  [[ "$sk" == *"} 3< "* ]]
+  [[ "$sk" != *"exec 3< "* ]]
   [[ "$sk" == *"'--args' '3'"* ]]
   # the token value is NOT in what gets typed into the pane
   ! grep -q 'ghp_SEKRET' "$SHIM_LOG"
