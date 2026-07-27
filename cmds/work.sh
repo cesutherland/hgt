@@ -170,6 +170,7 @@ _prepare_sandbox() {
   local wt="$1" a
   HGT_SANDBOX_ARGV=()
   _SANDBOX_SQ=""
+  _SANDBOX_ARGS_FILE=""
   if ! sandbox_enabled; then
     warn "sandbox: disabled — launching the agent UNCONFINED (full FS + credential access, #67)"
     return 0
@@ -204,7 +205,18 @@ launch_session() {
     _prepare_sandbox "$wt"
     # Expanding an empty HGT_SANDBOX_ARGV (--no-sandbox) under set -u is safe on bash 4.4+ (the
     # target; Kubuntu ships 5.x) — it'd trip on 3.2/4.3 if hgt ever claims broader portability.
-    (cd "$wt" && run "${HGT_SANDBOX_ARGV[@]}" claude -n "$name" "$prompt")
+    (
+      cd "$wt"
+      if [ -n "${_SANDBOX_ARGS_FILE:-}" ]; then
+        # #81: fd 3 carries the token payload for `bwrap --args 3`. Scope the redirect to the command
+        # GROUP (not `exec` into the shell) so fd 3 closes when claude exits — never left open in this
+        # shell where `cat /proc/self/fd/3` would reprint the PAT. rm inside: the group's redirect has
+        # already opened the fd, so unlinking now leaves bwrap reading an anonymous inode.
+        { rm -f "$_SANDBOX_ARGS_FILE"; run "${HGT_SANDBOX_ARGV[@]}" claude -n "$name" "$prompt"; } 3<"$_SANDBOX_ARGS_FILE"
+      else
+        run "${HGT_SANDBOX_ARGV[@]}" claude -n "$name" "$prompt"
+      fi
+    )
     return
   fi
 
@@ -237,7 +249,14 @@ launch_session() {
     # that. (Verified against real tmux, not just an sh -c parse — see PR #49.)
     _prepare_sandbox "$wt"
     run tmux new-session -d -s "$name" -c "$wt"
-    run tmux send-keys -t "$name" "${_SANDBOX_SQ}claude -n $(_shq "$name") $(_shq "$prompt")" Enter
+    local launch="${_SANDBOX_SQ}claude -n $(_shq "$name") $(_shq "$prompt")"
+    # #81: with a scoped token, wrap the launch in a command GROUP that opens the payload on fd 3 for
+    # `bwrap --args 3` and unlinks it — the `3< <file>` on the group closes the fd when claude exits,
+    # so it's never left readable in the pane shell (unlike `exec 3<`). dash-safe (no process sub).
+    if [ -n "${_SANDBOX_ARGS_FILE:-}" ]; then
+      launch="{ rm -f $(_shq "$_SANDBOX_ARGS_FILE"); ${launch}; } 3< $(_shq "$_SANDBOX_ARGS_FILE")"
+    fi
+    run tmux send-keys -t "$name" "$launch" Enter
     run tmux split-window -h -t "$name" -c "$wt"
     run tmux select-pane -t "$name" -L
   fi

@@ -117,6 +117,15 @@ hgt work <n>             # local execution: worktree + Claude session for issue 
   auth, sibling repos) gone — while tmux and the human's shell pane stay on the host so
   `tmux attach` is untouched. On by default and fail-closed; `--no-sandbox` opts out. On
   Ubuntu 24.04+ install the one-time AppArmor profile first (the preflight prints how).
+  - **Publish boundary (issue #81):** by default the jail holds **no push credential**, so
+    the agent's commits dead-end locally. Set `HGT_SANDBOX_GITHUB_TOKEN` to a scoped
+    machine-user PAT and the jail gains a credentialed push/PR path (`git@`→https, plus a git
+    credential helper that reads `$GITHUB_TOKEN`) — the *same* seam for attended and unattended
+    runs. The token is delivered as an environment variable **into** the jail via
+    `bwrap --args <fd>`, so its value never touches the argv, the command echo, the tmux pane,
+    or `/proc/<pid>/cmdline`, and it dies with the process (no persistent on-disk secret).
+    **Precondition:** a token usable in the jail needs egress locked to GitHub/Anthropic
+    (issue #74) — wire the PAT *with* #74, not before it.
 
 ## Tests & CI
 

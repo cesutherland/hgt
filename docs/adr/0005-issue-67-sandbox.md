@@ -108,9 +108,28 @@ The preflight prints these commands verbatim when the jail can't start.
   worktree." Fix: bind the common dir ro and selectively re-bind rw only `objects/`, this
   worktree's dir, and its own branch ref/reflog. The read-all-branches part is inherent to
   sharing the object store (it's the repo's own code) — only a full independent clone removes it.
-- **Scoped push token not provisioned.** The `HGT_SANDBOX_GITHUB_TOKEN` seam exists but no
-  machine-user PAT is wired yet, so pushes from inside the jail fail closed until one is. That
-  provisioning is its own slice.
+- **Scoped push token — seam now wired (#81), provisioning still separate.** The
+  `HGT_SANDBOX_GITHUB_TOKEN` seam is plumbed: set it and the jail gains a credentialed push/PR
+  path (git@→https + a git credential helper reading `$GITHUB_TOKEN`), the same seam attended +
+  unattended (#17). The token is delivered as **jail env** via `bwrap --args <fd>` — the fd
+  stream carries the `--setenv GITHUB_TOKEN <tok>` pairs, so the value never touches the argv,
+  `run`'s echo, the tmux pane, or the world-readable `/proc/<pid>/cmdline`; it lands only in the
+  child's `environ` (owner-only) and dies with the process. The fd is sourced from an `mktemp`
+  payload (O_EXCL, mode 600) opened then unlinked at launch — no persistent on-disk secret;
+  stragglers from a failed launch are swept at the next one. No token → fail-closed as before.
+  Two things stay out of scope: **minting** the machine-user PAT (its own slice), and —
+  load-bearing — **egress (#74)**: a token usable in the jail under today's `--share-net` is the
+  exact exfil surface flagged above, so this seam is safe only while egress is
+  trusted/constrained. Wire the PAT *with* #74, not ahead of it.
+- **Env delivery inverts this ADR's own env-hygiene stance — a deliberate trade.** `--clearenv` +
+  the `_SANDBOX_ENV_PASS` allowlist exist precisely so host secrets like `GH_TOKEN` *don't* cross
+  into the jail; the publish seam now injects exactly that class of var on purpose. The cost: the
+  token is inherited by every descendant in the jail, so anything that dumps its environment (an
+  npm debug log, a crash reporter, the agent running `env` into a transcript under the rw-bound
+  `~/.claude`) can spill it — where a file would have required an explicit read. We accept it
+  because (a) the alternative, a token on the argv/pane, is a *worse* and cross-user-readable leak,
+  and (b) `environ` is owner-only and process-scoped. Reconsider if a leakier surface appears; the
+  clean endgame is a host-side broker so no credential materializes in the jail at all.
 - **Bind set is machine-specific** (nvm version, install layout). Overridable via
   `HGT_SANDBOX_RO_BIND` (extra ro paths) and `HGT_SANDBOX_SETENV` (extra env passthrough) so
   dogfooding friction is a config change, not a code change.

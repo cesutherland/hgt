@@ -15,7 +15,7 @@ args=("$@"); i=0
 while [ "$i" -lt "${#args[@]}" ]; do
   case "${args[$i]}" in
     --die-with-parent|--unshare-all|--unshare-user|--share-net|--clearenv) i=$((i + 1)) ;;
-    --proc|--dev|--tmpfs|--chdir) i=$((i + 2)) ;;
+    --proc|--dev|--tmpfs|--chdir|--args) i=$((i + 2)) ;;
     --ro-bind|--ro-bind-try|--bind|--bind-try|--setenv) i=$((i + 3)) ;;
     --*) i=$((i + 1)) ;;   # unknown flag: assume 0-arg
     *) break ;;            # the wrapped command starts here

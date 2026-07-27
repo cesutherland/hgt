@@ -512,3 +512,67 @@ Build the widget.'
   ! grep -q '^bwrap ' "$SHIM_LOG"
   ! grep -q '^tmux send-keys' "$SHIM_LOG"
 }
+
+# --- credentialed publish (#81) ----------------------------------------------------------------
+# The publish boundary: by default the jail holds NO push credential — commits dead-end locally
+# (the #67 fail-closed default). HGT_SANDBOX_GITHUB_TOKEN opts in a scoped push/PR path, the SAME
+# seam attended + unattended (#17). The token is delivered as jail env via `bwrap --args <fd>`, so
+# its value never touches the argv/log/pane/cmdline and leaves no persistent on-disk secret.
+
+@test "publish: no token -> the jail holds no push credential (fail-closed default, #81)" {
+  work_env
+  run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  local bw; bw=$(grep '^bwrap ' "$SHIM_LOG")
+  [[ "$bw" != *"--args"* ]]                        # no token payload fd
+  [[ "$bw" != *"GITHUB_TOKEN"* ]]                  # no push credential at all
+  [[ "$bw" != *"insteadOf"* ]]                     # no https rewrite / push path
+  [[ "$bw" == *"--setenv GIT_CONFIG_COUNT 1"* ]]   # only the gpgsign-off entry
+}
+
+@test "publish: a scoped token is wired for push via env, value never on the argv (#81)" {
+  work_env
+  export HGT_SANDBOX_CRED_DIR="$TMP/cred"
+  run env HGT_SANDBOX_GITHUB_TOKEN=ghp_SEKRET "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  local bw; bw=$(grep '^bwrap ' "$SHIM_LOG")
+  # token injected as jail env via a fd (--args 3), NOT spelled on the command line
+  [[ "$bw" == *"--args 3"* ]]
+  [[ "$bw" != *"--setenv GITHUB_TOKEN"* ]]           # never on the argv
+  [[ "$bw" != *"--setenv GH_TOKEN"* ]]
+  # git rewrites git@ -> https and its helper reads $GITHUB_TOKEN from env — no gh, no on-disk file
+  [[ "$bw" == *"url.https://github.com/.insteadOf"* ]]
+  [[ "$bw" == *'"$GITHUB_TOKEN"'* ]]                 # helper pulls the env var
+  [[ "$bw" == *"credential.helper"* ]]               # empty reset clears any inherited helper
+  [[ "$bw" != *"gh auth git-credential"* ]]          # push path must not depend on gh
+  [[ "$bw" != *"GH_CONFIG_DIR"* ]]                   # no gh config dir anymore
+  [[ "$bw" == *"--setenv GIT_CONFIG_COUNT 4"* ]]     # gpgsign + url + helper-reset + host-helper
+  # gh still bound best-effort for `gh pr create`
+  [[ "$bw" == *"--ro-bind $(command -v gh) $(command -v gh)"* ]]
+  # the token value appears NOWHERE hgt builds/echoes...
+  ! grep -q 'ghp_SEKRET' "$SHIM_LOG"
+  # ...and the inline launch opened+unlinked the payload: no persistent on-disk secret (#2)
+  [ -z "$(find "$TMP/cred" -name 'hgt-args.*' 2>/dev/null)" ]
+}
+
+@test "publish: the token rides an unlinked mktemp payload, never the pane keystrokes (#81)" {
+  work_env  # default tmux path -> send-keys types the launch command into the visible pane
+  export HGT_SANDBOX_CRED_DIR="$TMP/cred"
+  run env HGT_SANDBOX_GITHUB_TOKEN=ghp_SEKRET "$HGT_BIN" work 5
+  [ "$status" -eq 0 ]
+  local sk; sk=$(grep '^tmux send-keys' "$SHIM_LOG")
+  # the launch is wrapped in a command group: `{ rm -f <payload>; <bwrap…>; } 3< <payload>` — fd 3
+  # feeds bwrap --args 3 and closes when claude exits (not left open in the pane via `exec 3<`)
+  [[ "$sk" == *"{ rm -f "* ]]
+  [[ "$sk" == *"} 3< "* ]]
+  [[ "$sk" != *"exec 3< "* ]]
+  [[ "$sk" == *"'--args' '3'"* ]]
+  # the token value is NOT in what gets typed into the pane
+  ! grep -q 'ghp_SEKRET' "$SHIM_LOG"
+  # it lives only in the mode-600 mktemp payload, NUL-separated as bwrap --setenv args
+  local f; f=$(find "$TMP/cred" -name 'hgt-args.*')
+  [ -n "$f" ]
+  [ "$(stat -c %a "$f")" = 600 ]
+  tr '\0' '\n' <"$f" | grep -qx 'GITHUB_TOKEN'
+  tr '\0' '\n' <"$f" | grep -qx 'ghp_SEKRET'
+}

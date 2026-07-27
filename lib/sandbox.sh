@@ -8,6 +8,14 @@
 # This is a shared seam: launch_session prefixes it onto claude on both the inline and tmux
 # paths, and the future local-listener executor reuses it — identical confinement, attended or
 # not (#17). Everything here is a pure argv builder + preflight; no side effects at source time.
+#
+# The publish boundary (#81): by default the jail holds NO push credential — commits land locally
+# and stop there. Set HGT_SANDBOX_GITHUB_TOKEN to a scoped machine-user PAT and the jail gains a
+# credentialed push/PR path (git@ -> https + a git credential helper reading $GITHUB_TOKEN), the
+# SAME seam attended and unattended (#17). The token is delivered as an env var INTO the jail via
+# `bwrap --args <fd>`, so its value never hits the argv / the `run` echo / the tmux pane / the
+# world-readable /proc cmdline, and it dies with the process (no on-disk secret). Fail-closed stays
+# the default: no token, no push power.
 
 # Runtime deps under $HOME re-bound read-only over the tmpfs. Machine-specific (node via nvm,
 # the claude launcher under ~/.local), so extend via HGT_SANDBOX_RO_BIND (space-separated,
@@ -105,15 +113,83 @@ sandbox_argv() {
     --chdir "$wt"
   )
 
-  # Env: pass through the curated allowlist (skip unset), then force gpg-signing off — the jail
-  # has no ~/.gnupg, so the agent can't sign as Carl and its commits are unsigned by design.
+  # Env: pass through the curated allowlist (skip unset).
   local var
   for var in $_SANDBOX_ENV_PASS ${HGT_SANDBOX_SETENV:-}; do
     [ -n "${!var:-}" ] && HGT_SANDBOX_ARGV+=(--setenv "$var" "${!var}")
   done
-  HGT_SANDBOX_ARGV+=(
-    --setenv GIT_CONFIG_COUNT 1
-    --setenv GIT_CONFIG_KEY_0 commit.gpgsign
-    --setenv GIT_CONFIG_VALUE_0 false
-  )
+
+  # git config injected via the numbered GIT_CONFIG_* env (no ~/.gitconfig write needed). Always
+  # force gpg-signing off — the jail has no ~/.gnupg, so the agent can't sign as Carl and its
+  # commits are unsigned by design. With a scoped push token (#81) also rewrite git@ -> https and
+  # give git a credential helper that reads $GITHUB_TOKEN, so the jailed agent can push with ONLY
+  # that token — never Carl's ~/.ssh or admin gh. The token reaches the jail as an env var delivered
+  # via `bwrap --args 3` (see _sandbox_credential + launch_session): the fd stream carries the
+  # `--setenv GITHUB_TOKEN <tok>` pairs, so the value never hits the argv, the `run` echo, the tmux
+  # pane, or the world-readable /proc cmdline, and it dies with the process (no on-disk secret to
+  # locate or reap). Push deliberately does NOT go through gh: a snap gh can't run in the jail and
+  # would take push down with it (dogfooded on #81); git reads the env directly.
+  local -a gitcfg=(commit.gpgsign false)
+  if [ -n "${HGT_SANDBOX_GITHUB_TOKEN:-}" ]; then
+    _sandbox_credential "$wt"
+    HGT_SANDBOX_ARGV+=(--args 3)  # fd 3 injects `--setenv GITHUB_TOKEN <tok>` etc.; launch opens it
+    gitcfg+=(
+      "url.https://github.com/.insteadOf" "git@github.com:"
+      # Empty reset first: clears any credential.helper inherited from the ro-bound ~/.gitconfig, so
+      # only ours is consulted (git tries helpers in list order). Then the env-reading helper: `get`
+      # emits the token, and it exits 0 on git's follow-up `store`/`erase` calls (bare `&&` would
+      # exit non-zero on a non-get op and make git grumble).
+      "credential.helper" ""
+      "credential.https://github.com.helper" '!f() { test "$1" = get && printf "username=x-access-token\npassword=%s\n" "$GITHUB_TOKEN"; true; }; f'
+    )
+  fi
+  HGT_SANDBOX_ARGV+=(--setenv GIT_CONFIG_COUNT "$(( ${#gitcfg[@]} / 2 ))")
+  local i=0
+  while [ "$i" -lt "${#gitcfg[@]}" ]; do
+    HGT_SANDBOX_ARGV+=(
+      --setenv "GIT_CONFIG_KEY_$((i / 2))" "${gitcfg[i]}"
+      --setenv "GIT_CONFIG_VALUE_$((i / 2))" "${gitcfg[i + 1]}"
+    )
+    i=$((i + 2))
+  done
+}
+
+# _sandbox_credential WT — stage the scoped PAT (HGT_SANDBOX_GITHUB_TOKEN) for delivery INTO the
+# jail as an env var (#81), the same seam attended + unattended (#17). The value must never ride
+# bwrap's argv: send-keys would type it into the visible tmux pane, `run` would echo it, and
+# /proc/<pid>/cmdline is world-readable. So we hand it to bwrap via `--args <fd>` — the fd stream
+# sets GITHUB_TOKEN (+ GH_TOKEN for gh) inside the jail, landing only in the child's environ
+# (owner-only) and dying with the process. No persistent on-disk secret: the fd is sourced from a
+# mktemp'd file (O_EXCL + random name + mode 600 → safe even on a shared base, #1) that
+# launch_session opens then immediately unlinks (#2). git's helper reads $GITHUB_TOKEN; gh reads
+# $GH_TOKEN natively. Sets _SANDBOX_ARGS_FILE (the payload path) and appends the gh binary bind
+# (best-effort) to HGT_SANDBOX_ARGV. Writes a file — a launch-time side effect.
+#
+# NOTE (trust): a usable token in the jail + today's --share-net egress is the exfil surface ADR
+# 0005 flags as gated on #74. Safe to use only while egress is trusted/constrained.
+_sandbox_credential() {
+  local wt="$1" gh
+  # A safe host dir for the transient payload: XDG_RUNTIME_DIR (per-user, 0700, tmpfs) when set,
+  # else $TMPDIR / /tmp. HGT_SANDBOX_CRED_DIR overrides (the suite points it inside its tmpdir).
+  local base="${HGT_SANDBOX_CRED_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}}"
+  ( umask 077; mkdir -p "$base" )
+  # Reaper: launch unlinks the payload, but if a launch dies before its pane gets there (tmux/
+  # send-keys fails, pane exits early, user Ctrl-Cs) the file is stranded with no cleaner — an EXIT
+  # trap in hgt would race the pane. Sweep payloads older than 5 min at the next launch instead.
+  find "$base" -maxdepth 1 -name 'hgt-args.*' -mmin +5 -delete 2>/dev/null || true
+  # mktemp: O_EXCL + unpredictable name + mode 600 — no symlink / pre-create attack even on a shared
+  # base (#1). Holds the token on disk only from here until launch opens+unlinks it: microseconds on
+  # the inline path, tmux+shell-startup on the tmux path — brief, owner-only, tmpfs under XDG (#2).
+  _SANDBOX_ARGS_FILE=$(umask 077; mktemp "$base/hgt-args.XXXXXX") \
+    || die "sandbox: couldn't stage the credential payload under $base"
+  # NUL-separated bwrap args, injected where `--args 3` sits: set the scoped token as jail env.
+  printf '%s\0' --setenv GITHUB_TOKEN "$HGT_SANDBOX_GITHUB_TOKEN" \
+                --setenv GH_TOKEN "$HGT_SANDBOX_GITHUB_TOKEN" >"$_SANDBOX_ARGS_FILE"
+  # gh is only for `gh pr create` (reads GH_TOKEN from env) — push never needs it. Bind best-effort;
+  # skip a snap gh, dead in the jail (no snapd/mounts). Its absence never blocks push.
+  gh=$(command -v gh) || { warn "sandbox: gh not on PATH — jailed \`gh pr create\` unavailable (push still works)"; return 0; }
+  case "$gh" in
+    /snap/*) warn "sandbox: gh is a snap ($gh) — can't run in the jail, so \`gh pr create\` won't work there (push still works); install a non-snap gh for in-jail PRs"; return 0 ;;
+  esac
+  HGT_SANDBOX_ARGV+=(--ro-bind "$gh" "$gh")
 }
