@@ -591,7 +591,10 @@ Build the widget.'
   [[ "$output" == *"admin"* ]]
   [[ "$output" == *"machine-user PAT"* ]]        # names the assumption
   [[ "$output" == *"merge"* ]]                   # names the risk
-  ! grep -q '^bwrap ' "$SHIM_LOG"                # refused before the jail ever launches
+  # not just any bwrap line: the userns preflight probe (_sandbox_userns_ok) always runs one of
+  # its own before the token check, so plain '^bwrap ' would pass even on a real regression —
+  # match the claude-wrapping jail specifically (its argv always opens --die-with-parent)
+  ! grep -q '^bwrap --die-with-parent ' "$SHIM_LOG"  # refused before the jail ever launches
   ! grep -q '^claude ' "$SHIM_LOG"
 }
 
@@ -605,7 +608,7 @@ Build the widget.'
   [[ "$output" == *"workflow"* ]]
   [[ "$output" == *"machine-user PAT"* ]]        # names the assumption
   [[ "$output" == *"merge"* ]]                   # names the risk
-  grep -q '^bwrap ' "$SHIM_LOG"                  # warning is not a gate here
+  grep -q '^bwrap --die-with-parent ' "$SHIM_LOG"  # warning is not a gate: the jail still launches
 }
 
 @test "publish: a correctly fine-grained-scoped token launches without noise (#98)" {
@@ -616,7 +619,7 @@ Build the widget.'
   run env HGT_SANDBOX_GITHUB_TOKEN=ghp_SCOPED "$HGT_BIN" work 5 --no-tmux
   [ "$status" -eq 0 ]
   [[ "$output" != *"warn: sandbox: HGT_SANDBOX_GITHUB_TOKEN"* ]]
-  grep -q '^bwrap ' "$SHIM_LOG"
+  grep -q '^bwrap --die-with-parent ' "$SHIM_LOG"  # the claude jail launches, not just the preflight probe
 }
 
 @test "publish: scope probe failure warns but does not block launch (#98)" {
@@ -625,5 +628,5 @@ Build the widget.'
   run env HGT_SANDBOX_GITHUB_TOKEN=ghp_BAD SHIM_GH_SCOPES_EXIT=1 "$HGT_BIN" work 5 --no-tmux
   [ "$status" -eq 0 ]
   [[ "$output" == *"couldn't probe"* ]]
-  grep -q '^bwrap ' "$SHIM_LOG"
+  grep -q '^bwrap --die-with-parent ' "$SHIM_LOG"  # the claude jail launches despite the probe failure
 }
