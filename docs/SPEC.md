@@ -90,17 +90,28 @@ These are settled decisions from design. Do not relitigate them in code review; 
 them. (See §8 for the "why" links.)
 
 **Secrets / tokens**
-- Runner gets **only** `ANTHROPIC_API_KEY` + a minimal `GITHUB_TOKEN`. No cloud creds,
-  no npm/publish/deploy tokens — nothing else worth stealing.
+- Runner gets **only** a Claude auth secret (`ANTHROPIC_API_KEY` / OAuth token) + one
+  narrow GitHub credential. No cloud creds, no npm/publish/deploy tokens — nothing else
+  worth stealing.
 - Do **not** grant `id-token: write` unless we actually federate to a cloud provider.
   Omitting it means the OIDC request token is never minted, removing that exfil target.
-- `GITHUB_TOKEN` permissions: `contents: write` + `pull-requests: write`, nothing more.
+- The executor's GitHub writes come from a **scoped machine-user PAT**, not `GITHUB_TOKEN`
+  (#79, [ADR 0008](adr/0008-issue-79-machine-user-prs.md)): a classic PAT, `public_repo` +
+  `workflow`, on a write-access collaborator that is neither `github-actions` nor the human
+  reviewer. That is what keeps the create+approve toggle off and makes CI fire on executor
+  PRs. The ambient `GITHUB_TOKEN` is demoted to **read-only** — it has no writes left to do.
+- The tradeoff is explicit: a PAT outlives the job and is readable by the agent it arms.
+  Containment is its scope — push branches, open PRs; `public_repo` cannot reach private
+  repos; it cannot merge or approve. A GitHub App (short-lived install tokens) is the
+  endgame (#56/#68).
 
 **Branch protection on `main`** (a ruleset)
 - Require PR + at least one **human** review before merge.
 - Do **not** add `github-actions` (or any executor app) to any bypass list.
 - **Disable** "Allow GitHub Actions to create and approve pull requests" — otherwise an
-  agent can rubber-stamp its own PR and the human gate evaporates.
+  agent can rubber-stamp its own PR and the human gate evaporates. GitHub bundles *create*
+  and *approve* into that one switch, so an executor running as `github-actions` can't open
+  a PR with it off; the machine user above is how we keep it off (#79).
 - **Enable** "Require approval of the most recent reviewable push."
 - Per-branch write isn't a token scope — it's branch protection applied to the ref. The
   executor pushes feature branches freely; `main` rejects direct writes automatically.
