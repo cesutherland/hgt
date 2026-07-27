@@ -149,6 +149,19 @@ _json_arr() {
   printf ']'
 }
 
+# _sandbox_extant [PATH...] — the arguments that actually exist on this box, in order.
+#
+# This is the `--bind-try` / `--ro-bind-try` of ADR 0005, which SRT has no equivalent for: naming a
+# path that doesn't exist doesn't get ignored, it kills the launch ("bwrap: Can't bind mount ...:
+# No such file or directory"). Every optional entry is machine-specific by nature —
+# `~/.gitconfig.local` and `~/.claude.json` are absent on plenty of boxes, `/tmp/tmux-<uid>` only
+# appears once tmux has run — so an unfiltered list turns a normal setup into a hard failure.
+_sandbox_extant() {
+  local p
+  for p in "$@"; do [ -e "$p" ] && printf '%s\n' "$p"; done
+  return 0
+}
+
 # _sandbox_remote_host WT — the hostname of WT's push remote, for the egress allowlist, or nothing.
 # Salvaged from PR #90 with its URL parsing fixed. Order matters: cut the authority off FIRST, then
 # strip userinfo, then the port. Stripping userinfo first eats the wrong '@' in a path like
@@ -208,21 +221,26 @@ _sandbox_settings() {
   _SANDBOX_SCRATCH="$wt/.hgt/tmp"
   _SANDBOX_SETTINGS_FILE="$wt/.hgt/srt.json"
   mkdir -p "$_SANDBOX_SCRATCH/gh"
+  # Create it before the deny list is filtered below, so it can deny writes to itself.
+  : >"$_SANDBOX_SETTINGS_FILE"
 
   # Reads are deny-then-allow in SRT and default to ALLOWED — the inverse of ADR 0005's tmpfs
   # $HOME. `denyRead: [$HOME]` restores deny-by-default for the interesting half of the filesystem
   # (~/.ssh, the admin gh auth, sibling repos), then we allow back only what the agent needs.
   # Linux SRT takes literal paths — no globs — so every entry here is a real path.
-  local -a deny_read=("$HOME") allow_read=("$wt" "$gitdir") allow_write=("$wt" "$gitdir")
   # The worktree lives under $HOME on a normal setup, so it has to be re-allowed explicitly:
   # allowRead is documented to beat denyRead; allowWrite is not documented to imply read at all.
+  # The worktree and the git dir are unconditional (they exist by construction); everything under
+  # $HOME goes through _sandbox_extant, since a missing entry would abort the launch.
+  local -a deny_read=("$HOME") allow_read=("$wt" "$gitdir") allow_write=("$wt" "$gitdir")
+  local -a opt_read=() opt_rw=()
   for dep in $_SANDBOX_RO_DEPS ${HGT_SANDBOX_RO_BIND:-}; do
     case "$dep" in /*) p="$dep" ;; *) p="$HOME/$dep" ;; esac
-    allow_read+=("$p")
+    opt_read+=("$p")
   done
-  for dep in $_SANDBOX_RW_DEPS; do
-    allow_read+=("$HOME/$dep"); allow_write+=("$HOME/$dep")
-  done
+  for dep in $_SANDBOX_RW_DEPS; do opt_rw+=("$HOME/$dep"); done
+  while IFS= read -r p; do allow_read+=("$p"); done < <(_sandbox_extant "${opt_read[@]}")
+  while IFS= read -r p; do allow_read+=("$p"); allow_write+=("$p"); done < <(_sandbox_extant "${opt_rw[@]}")
 
   # Host IPC is the one class ADR 0005 got for free (--unshare-all + tmpfs $HOME) that SRT does
   # not: it hands the jail a normal filesystem, and --unshare-net doesn't isolate AF_UNIX. The
@@ -232,14 +250,18 @@ _sandbox_settings() {
   # warning when seccomp is unavailable, so name the directories too. We deliberately do NOT deny
   # /tmp wholesale — SRT stages its own proxy socket there when XDG_RUNTIME_DIR is unset, which
   # `env -i` guarantees. Writes are denied by default anyway; TMPDIR points at the scratch dir.
-  deny_read+=("/tmp/tmux-$uid" "/run/user/$uid")
+  while IFS= read -r p; do deny_read+=("$p"); done < <(_sandbox_extant "/tmp/tmux-$uid" "/run/user/$uid")
 
   # allowGitConfig stays false (SRT's default). .git/config lives in the SHARED common dir, so a
   # jailed agent writing core.pager / core.hooksPath there executes on the HOST the next time you
   # run git in this repo. The cost is that `git push -u` and gh's fork disambiguation fail; use
   # `git push origin HEAD`. config.worktree gets an explicit deny — it is NOT in SRT's mandatory
-  # list, and extensions.worktreeConfig would otherwise reopen the same door per-worktree.
-  local -a deny_write=("$_SANDBOX_SETTINGS_FILE" "$gitdir/config" "$gitdir/hooks" "$owndir/config.worktree")
+  # list, and extensions.worktreeConfig would otherwise reopen the same door per-worktree. (It
+  # usually doesn't exist yet, so the filter drops it; creating one is inert on its own, because
+  # turning it on needs `extensions.worktreeConfig` in the .git/config we just denied.)
+  local -a deny_write=()
+  while IFS= read -r p; do deny_write+=("$p"); done < <(
+    _sandbox_extant "$_SANDBOX_SETTINGS_FILE" "$gitdir/config" "$gitdir/hooks" "$owndir/config.worktree")
 
   {
     printf '{\n'

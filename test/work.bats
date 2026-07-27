@@ -20,6 +20,13 @@ work_env() {
   # so the shims that run *inside* it (srt, and claude through it) get it back the same way a real
   # user would add NVM_DIR: through the HGT_SANDBOX_SETENV seam. No back door for the suite.
   export HGT_SANDBOX_SETENV='SHIM_LOG'
+  # A fixture $HOME. The generated settings name only paths that exist (SRT has no `--bind-try`
+  # equivalent — an absent path aborts the launch), so without this the settings assertions would
+  # read differently on every developer's box depending on whether they happen to have a
+  # ~/.gitconfig.local. Everything _SANDBOX_RO_DEPS/_SANDBOX_RW_DEPS names is present here.
+  export HOME="$TMP/home"
+  mkdir -p "$HOME/.nvm" "$HOME/.local" "$HOME/.config/git" "$HOME/.claude"
+  : >"$HOME/.gitconfig"; : >"$HOME/.gitconfig.local"; : >"$HOME/.claude.json"
   export SHIM_GH_OUT='number=5
 url=https://github.com/cesutherland/hgt/issues/5
 title=Add a Widget
@@ -476,7 +483,7 @@ bare_path() {
   grep -q "^srt --settings $wt/.hgt/srt.json -- claude -n hgt/5-add-widget " "$SHIM_LOG"
   # THE boundary: reads default to allowed in SRT, so $HOME is denied wholesale and allowed back
   # piecemeal. The worktree lives under $HOME on a normal setup, hence the explicit re-allow.
-  [[ "$cfg" == *"\"denyRead\": [\"$HOME\","* ]]
+  [[ "$cfg" == *"\"denyRead\": [\"$HOME\""* ]]
   [[ "$cfg" == *"\"allowRead\": [\"$wt\",\"$wt/.git\","* ]]
   # worktree + the repo's shared .git (resolved via git rev-parse) are the only writable tree,
   # alongside claude's own state
@@ -493,6 +500,10 @@ bare_path() {
 
 @test "sandbox: the jail can't read ~/.ssh or the admin gh auth, and can't rewrite its own policy" {
   work_env
+  # The tmux socket dir can't be fixtured — it's derived from the real uid — and SRT drops a deny
+  # for a path that isn't there, so create the same dir tmux itself would. Left behind on purpose:
+  # removing it could yank the socket out from under a real tmux session on the developer's box.
+  mkdir -p "/tmp/tmux-$(id -u)"
   run "$HGT_BIN" work 5 --no-tmux
   [ "$status" -eq 0 ]
   local wt="$TMP/wt/5-add-widget" cfg; cfg=$(srt_cfg)
@@ -502,18 +513,16 @@ bare_path() {
   [[ "$cfg" != *".config/gh"* ]]
   # the settings file sits inside the agent's own write grant, so it denies writes to itself —
   # otherwise a tampered copy would be waiting for the next launch to read
-  [[ "$cfg" == *"\"denyWrite\": [\"$wt/.hgt/srt.json\","* ]]
+  [[ "$cfg" == *"\"denyWrite\": [\"$wt/.hgt/srt.json\""* ]]
   # .git/config is in the SHARED common dir: core.pager/core.hooksPath written there would execute
   # on the HOST next time the human runs git in this repo. config.worktree is the same door, and is
   # NOT in SRT's own mandatory-deny list, so hgt names it.
   [[ "$cfg" == *"\"$wt/.git/config\""* ]]
   [[ "$cfg" == *"\"$wt/.git/hooks\""* ]]
-  [[ "$cfg" == *"\"$wt/.git/config.worktree\""* ]]
   [[ "$cfg" == *'"allowGitConfig": false'* ]]
   # host IPC: --unshare-net doesn't isolate AF_UNIX, and an agent that reaches the tmux control
   # socket can send-keys into the human's other panes — unconfined host execution
-  [[ "$cfg" == *"/tmp/tmux-$(id -u)"* ]]
-  [[ "$cfg" == *"/run/user/$(id -u)"* ]]
+  [[ "$cfg" == *"\"/tmp/tmux-$(id -u)\""* ]]
 }
 
 @test "sandbox: a host-exported secret does not reach the jail; HGT_SANDBOX_SETENV opts one in" {
@@ -539,9 +548,27 @@ bare_path() {
 
 @test "sandbox: HGT_SANDBOX_RO_BIND extends the readable paths (dogfooding seam)" {
   work_env
-  HGT_SANDBOX_RO_BIND=/opt/toolchain run "$HGT_BIN" work 5 --no-tmux
+  mkdir -p "$TMP/toolchain"
+  HGT_SANDBOX_RO_BIND="$TMP/toolchain" run "$HGT_BIN" work 5 --no-tmux
   [ "$status" -eq 0 ]
-  [[ "$(srt_cfg)" == *'"/opt/toolchain"'* ]]
+  [[ "$(srt_cfg)" == *"\"$TMP/toolchain\""* ]]
+}
+
+@test "sandbox: paths that don't exist are omitted, not named (SRT has no --bind-try)" {
+  work_env
+  # ADR 0005 used --ro-bind-try/--bind-try, so an absent ~/.gitconfig.local was silently skipped.
+  # SRT has no equivalent: naming a path that isn't there aborts the launch with
+  # "bwrap: Can't bind mount ...: No such file or directory". Optional deps are machine-specific
+  # by nature, so this is the difference between "works on a fresh box" and "doesn't".
+  rm -f "$HOME/.gitconfig.local" "$HOME/.claude.json"
+  HGT_SANDBOX_RO_BIND=/definitely/not/here run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  local cfg; cfg=$(srt_cfg)
+  [[ "$cfg" != *".gitconfig.local"* ]]
+  [[ "$cfg" != *".claude.json"* ]]
+  [[ "$cfg" != *"/definitely/not/here"* ]]
+  [[ "$cfg" == *"\"$HOME/.gitconfig\""* ]]   # the ones that do exist still land
+  [[ "$cfg" == *"\"$HOME/.claude\""* ]]
 }
 
 @test "sandbox: the egress allowlist is the Anthropic API plus the worktree's own remote" {
