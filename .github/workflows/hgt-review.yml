@@ -85,6 +85,13 @@ jobs:
       # matches the trigger's body-only caveat above. (Empty is possible despite the
       # trigger comment: a queued run can start after its thread was resolved or deleted.)
       #
+      # Minimized comments are not outstanding either (#99). Minimize (outdated / off-topic
+      # / resolved / spam) is invisible to isResolved, so without the filter a hidden
+      # comment reaches the agent as live feedback and earns a reply. A thread left
+      # unresolved with EVERY comment minimized therefore drops out whole — not a bare
+      # header with nothing under it, and not a phantom that holds has_feedback true and
+      # sends the agent at an empty block for the guard to then call red.
+      #
       # The heredoc delimiter is a uuid: feedback is untrusted text, and a guessable
       # delimiter would let a crafted comment terminate the block and set arbitrary step
       # outputs.
@@ -108,7 +115,7 @@ jobs:
                     reviewThreads(first: 100) {
                       nodes {
                         isResolved path line
-                        comments(first: 20) { nodes { databaseId author { login } body } }
+                        comments(first: 20) { nodes { databaseId author { login } body isMinimized } }
                       }
                     }
                   }
@@ -128,8 +135,10 @@ jobs:
                | "### Review by @\(.author.login // "ghost") [\(.state)]\n\(.body)\n"]
              + [$pr.reviewThreads.nodes[]
                | select(.isResolved | not)
+               | [.comments.nodes[] | select(.isMinimized | not)] as $live
+               | select($live | length > 0)
                | "### Unresolved thread — \(.path):\(.line // "?")\n"
-                 + ([.comments.nodes[] | "[id \(.databaseId)] @\(.author.login // "ghost"): \(.body)"] | join("\n")) + "\n"])
+                 + ([$live[] | "[id \(.databaseId)] @\(.author.login // "ghost"): \(.body)"] | join("\n")) + "\n"])
             | join("\n")')
 
           if [ -z "$feedback" ]; then
