@@ -422,7 +422,10 @@ Build the widget.'
   run env HGT_SANDBOX_GITHUB_TOKEN=ghp_SEKRET "$HGT_BIN" work 5 --no-tmux
   [ "$status" -eq 0 ]
   local bw; bw=$(grep '^bwrap ' "$SHIM_LOG")
-  # config dir bound + GH_CONFIG_DIR set (the token file lives here); gh bound best-effort for PR
+  # config dir bound READ-ONLY (agent reads the token, can't swap/tamper) + GH_CONFIG_DIR set here;
+  # gh bound best-effort for PR
+  [[ "$bw" == *"--ro-bind $TMP/cred/5-add-widget $TMP/cred/5-add-widget"* ]]
+  [[ "$bw" != *"--bind $TMP/cred/5-add-widget"* ]]   # never read-write
   [[ "$bw" == *"--ro-bind $(command -v gh) $(command -v gh)"* ]]
   [[ "$bw" == *"--setenv GH_CONFIG_DIR $TMP/cred/5-add-widget"* ]]
   # git rewrites git@ -> https and its credential helper reads the token FILE (never gh) — a snap gh

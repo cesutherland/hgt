@@ -148,8 +148,9 @@ sandbox_argv() {
 # _sandbox_credential WT — provision a jail-only GitHub credential from HGT_SANDBOX_GITHUB_TOKEN
 # (#81), the same seam for the attended and unattended paths (#17). The token must NOT ride an env
 # var: send-keys would type it straight into the visible tmux pane and `run` would echo it — a live
-# credential in scrollback/logs. So it rides a mode-700 dir bound read-write into the jail at the
-# same path; only the *path* appears in the argv. `token` (a plain file) is what git's credential
+# credential in scrollback/logs. So it rides a mode-700 dir bound READ-ONLY into the jail at the
+# same path (read is all git's helper needs; ro stops the agent swapping in another token or
+# scribbling on it). Only the *path* appears in the argv. `token` (a plain file) is what git's credential
 # helper reads to push — no gh in that path. `hosts.yml` is the same token in gh's format, for
 # `gh pr create` where gh actually runs. Sets _SANDBOX_GH_CONFIG_DIR and appends the dir bind (+ gh
 # binary, best-effort) to HGT_SANDBOX_ARGV. Writes files — a launch-time side effect, unlike the
@@ -174,7 +175,9 @@ github.com:
     git_protocol: https
 EOF
   )
-  HGT_SANDBOX_ARGV+=(--bind "$_SANDBOX_GH_CONFIG_DIR" "$_SANDBOX_GH_CONFIG_DIR")
+  # Read-only: the agent only needs to read the token, not rewrite it. (gh's update-check state.yml
+  # write into GH_CONFIG_DIR fails here, but gh degrades gracefully and its in-jail path is best-effort.)
+  HGT_SANDBOX_ARGV+=(--ro-bind "$_SANDBOX_GH_CONFIG_DIR" "$_SANDBOX_GH_CONFIG_DIR")
   # gh is only for `gh pr create` — push reads the token file directly, so a missing/broken gh must
   # never block it. Bind gh best-effort; skip a snap gh, which can't run in the jail (no snapd/mounts
   # here) and would only spew errors. Warn so PR-from-jail isn't a silent mystery.
