@@ -167,6 +167,8 @@ _prepare_sandbox() {
   local wt="$1" a
   HGT_SANDBOX_ARGV=()
   _SANDBOX_SQ=""
+  _SANDBOX_ARGS_FILE=""
+  _SANDBOX_FD_PREFIX=""
   if ! sandbox_enabled; then
     warn "sandbox: disabled — launching the agent UNCONFINED (full FS + credential access, #67)"
     return 0
@@ -174,6 +176,13 @@ _prepare_sandbox() {
   sandbox_preflight
   sandbox_argv "$wt"
   for a in "${HGT_SANDBOX_ARGV[@]}"; do _SANDBOX_SQ+="$(_shq "$a") "; done
+  # Credential seam (#81): when a scoped token is staged, both launch paths must open its payload on
+  # fd 3 and unlink it before bwrap reads `--args 3`. This prefix does it in the pane shell — dash-safe
+  # (plain `exec 3< file`, no process substitution); the inline path does the equivalent in-process.
+  # The payload path is not a secret; the token is inside the file, gone the moment it's opened.
+  if [ -n "${_SANDBOX_ARGS_FILE:-}" ]; then
+    _SANDBOX_FD_PREFIX="exec 3< $(_shq "$_SANDBOX_ARGS_FILE"); rm -f $(_shq "$_SANDBOX_ARGS_FILE"); "
+  fi
 }
 
 # launch_session N WT [TMUX] — the launcher seam (spec §4/§5). Default (TMUX=1): run the named
@@ -201,7 +210,15 @@ launch_session() {
     _prepare_sandbox "$wt"
     # Expanding an empty HGT_SANDBOX_ARGV (--no-sandbox) under set -u is safe on bash 4.4+ (the
     # target; Kubuntu ships 5.x) — it'd trip on 3.2/4.3 if hgt ever claims broader portability.
-    (cd "$wt" && run "${HGT_SANDBOX_ARGV[@]}" claude -n "$name" "$prompt")
+    (
+      cd "$wt"
+      # #81: open the token payload on fd 3 (for bwrap --args) and unlink it before launch, so the
+      # secret lives on disk for microseconds and only in the child's environ thereafter.
+      if [ -n "${_SANDBOX_ARGS_FILE:-}" ]; then
+        exec 3<"$_SANDBOX_ARGS_FILE"; rm -f "$_SANDBOX_ARGS_FILE"
+      fi
+      run "${HGT_SANDBOX_ARGV[@]}" claude -n "$name" "$prompt"
+    )
     return
   fi
 
@@ -234,7 +251,7 @@ launch_session() {
     # that. (Verified against real tmux, not just an sh -c parse — see PR #49.)
     _prepare_sandbox "$wt"
     run tmux new-session -d -s "$name" -c "$wt"
-    run tmux send-keys -t "$name" "${_SANDBOX_SQ}claude -n $(_shq "$name") $(_shq "$prompt")" Enter
+    run tmux send-keys -t "$name" "${_SANDBOX_FD_PREFIX}${_SANDBOX_SQ}claude -n $(_shq "$name") $(_shq "$prompt")" Enter
     run tmux split-window -h -t "$name" -c "$wt"
     run tmux select-pane -t "$name" -L
   fi
@@ -291,9 +308,6 @@ cmd_work_rm() {
   else
     run git worktree remove "$wtpath"
   fi
-
-  # Don't let a scoped push token (#81) outlive its worktree.
-  sandbox_credential_cleanup "$wtpath"
 
   info "removed worktree for issue $n (branch left intact)"
 }
