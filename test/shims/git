@@ -59,10 +59,14 @@ if [ "${1:-}" = remote ] && [ "${2:-}" = get-url ]; then
   exit 0
 fi
 
-# `log -1 --format=%s` — the latest commit subject, the PR's default title (#97).
+# `log -1 --format=%s` — the latest commit subject, the PR's default title (#97). Matched on
+# --format=%s specifically (not bare `log`): `work rm`'s unpushed check also shells out to
+# `git log HEAD --not --remotes --oneline`, which must keep falling through to SHIM_GIT_OUT
+# (default empty = "nothing unpushed") — conflating the two would break every clean `work rm`.
 if [ "${1:-}" = log ]; then
-  printf '%s\n' "${SHIM_GIT_LOG_OUT:-seed commit}"
-  exit 0
+  for a in "$@"; do case "$a" in
+    --format=%s) printf '%s\n' "${SHIM_GIT_LOG_OUT:-seed commit}"; exit 0 ;;
+  esac done
 fi
 
 # `show-ref --verify --quiet refs/heads/<branch>` — hgt's branch-existence probe that decides

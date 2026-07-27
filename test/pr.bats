@@ -20,7 +20,7 @@ pr_env() {
   [[ "$output" == *"https://github.com/cesutherland/hgt/pull/42"* ]]
 
   # probe first (idempotent by construction — not create-then-catch-422)
-  grep -q "^curl GET https://api.github.com/repos/cesutherland/hgt/pulls?head=cesutherland:testuser/5-add-widget&state=open$" "$SHIM_LOG"
+  grep -q '^curl GET https://api.github.com/repos/cesutherland/hgt/pulls?head=cesutherland:testuser/5-add-widget&state=open$' "$SHIM_LOG"
   # --base given explicitly: no default-branch lookup
   ! grep -q '^curl GET https://api.github.com/repos/cesutherland/hgt$' "$SHIM_LOG"
   # then create, with the given title/body/head/base
