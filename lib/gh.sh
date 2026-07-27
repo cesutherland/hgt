@@ -92,6 +92,19 @@ JSON
 gh api -X PUT repos/{owner}/{repo}/actions/permissions/workflow \
   -F default_workflow_permissions=read \
   -F can_approve_pull_request_reviews=false
+
+# 3) The machine user (#79). GitHub bundles create AND approve into step 2's single
+#    toggle, so an executor running as `github-actions` cannot open a PR with it off.
+#    A machine user is the way out: a dedicated bot account with write access opens the
+#    PRs instead — which also makes `on: pull_request` CI fire on them (a
+#    github-actions[bot]-authored PR triggers nothing). Never the human reviewer's own
+#    token: the author of a PR cannot review it.
+#    Mint a CLASSIC PAT on that account, scoped `public_repo` + `workflow` — fine-grained
+#    PATs can only target repos their account OWNS, and a collaborator owns nothing here.
+#    `public_repo` cannot reach private repos; `workflow` is what lets a PR branch carry
+#    .github/workflows/** changes. It can neither merge nor approve.
+gh api -X PUT repos/{owner}/{repo}/collaborators/MACHINE_USER -f permission=push
+gh secret set HGT_MACHINE_USER_TOKEN --app actions   # paste the classic PAT
 # -------------------------------------------------------------------------------
 EOF
 }

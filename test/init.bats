@@ -33,6 +33,8 @@ load helper
   [[ "$output" == *'"required_approving_review_count": 1'* ]]  # PR + >=1 human review
   [[ "$output" == *'"bypass_actors": []'* ]]                   # no executor-app bypass
   [[ "$output" == *"can_approve_pull_request_reviews=false"* ]] # no actions self-approval
+  [[ "$output" == *"HGT_MACHINE_USER_TOKEN"* ]]                # #79: PRs come from a machine
+  [[ "$output" == *"public_repo"* ]]                           #      user on a scoped classic PAT
 
   # printed, not applied: the shim log shows no ruleset/api mutation call
   ! grep -q 'rulesets' "$SHIM_LOG"
