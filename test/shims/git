@@ -20,11 +20,7 @@ if [ "${1:-}" = worktree ] && [ "${2:-}" = add ]; then
     case "$1" in
       -b | -B) shift 2; continue ;;  # branch flag takes a value
       -*) shift; continue ;;          # any other option
-      # First positional is the worktree path. Real `git worktree add` leaves a .git with a config
-      # and a hooks dir behind it; the sandbox seam (#95) denies writes to both, and SRT drops a
-      # deny for a path that doesn't exist — so the shim has to produce them or the deny silently
-      # vanishes and the test asserting it would be pinning nothing.
-      *) mkdir -p "$1/.git/hooks"; : >"$1/.git/config"; break ;;
+      *) mkdir -p "$1"; break ;;      # first positional is the worktree path
     esac
   done
 fi
