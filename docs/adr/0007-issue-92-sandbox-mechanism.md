@@ -103,7 +103,7 @@ which was closed unmerged. Implementing #95 was purely additive on `lib/sandbox.
 
 ## Amendment — what #95 found (0.0.67)
 
-Three things the spike could not have known, each of which shaped the implementation. Re-check
+Two things the spike could not have known, each of which shaped the implementation. Re-check
 them when the pin moves.
 
 - **Adopting SRT forces a network decision.** `network` is a required settings key and the Linux
@@ -114,9 +114,6 @@ them when the pin moves.
   an absent `~/.gitconfig.local` was silently skipped. SRT passes settings paths to bwrap
   verbatim and a missing one aborts the launch, so every optional path is filtered for existence
   first.
-- **SRT's mandatory `.git/config` / `.git/hooks` protection does not apply to a bare git dir**
-  handed to it as an `allowWrite` root, which is exactly what a worktree setup does. Narrowing
-  that grant is **#75**; #95 leaves the write surface where ADR 0005 had it.
 
 The `env -i` mitigation below was confirmed the hard way: a `GH_TOKEN` exported in the calling
 shell does reach the jail without it, and SRT ships no default `unsetEnvVars`.
@@ -152,9 +149,6 @@ shell does reach the jail without it, and SRT ships no default `unsetEnvVars`.
   still its own slice, now expressed as `allowWrite` entries rather than bwrap binds.
 - **#75 changes shape.** Confining the `.git` bind becomes an `allowWrite`/`denyWrite` pair
   instead of selective bwrap re-binds — likely simpler, still its own slice.
-- **The `.git` write grant is as wide as ADR 0005 left it** — SRT's own `.git/config` protections
-  don't reach it (see the amendment), so a jailed agent can still write a `core.pager` that runs
-  on the host. Unchanged by this ADR; **#75** is where it gets narrowed.
 - **ssh remotes are unreachable**, so `git@…` is rewritten to https unconditionally — otherwise a
   token-less jail has *zero* remote access and even `git fetch` hangs rather than failing.
 - **`~/.cache` and `~/.npm` are unreadable**, so in-jail `npm install` / `npx` will need
