@@ -490,8 +490,9 @@ bare_path() {
   [[ "$cfg" == *"\"allowWrite\": [\"$wt\",\"$wt/.git\",\"$HOME/.claude\",\"$HOME/.claude.json\"]"* ]]
   # git identity is readable, so commits carry the human's name without a writable ~/.gitconfig
   [[ "$cfg" == *"\"$HOME/.gitconfig\""* ]]
-  # an unlisted host is denied outright rather than referred to an ask-callback, which in a
-  # detached pane would either hang forever or auto-allow
+  # SRT always drops the net namespace and requires a network block, so the swap can't be
+  # network-neutral. This fixed list is a placeholder — deriving it belongs to #74.
+  [[ "$cfg" == *'"allowedDomains": ["api.anthropic.com","github.com","api.github.com"]'* ]]
   [[ "$cfg" == *'"strictAllowlist": true'* ]]
   # gpg-signing forced off inside — the agent has no ~/.gnupg, can't sign as the human
   grep -q '^srt-env GIT_CONFIG_KEY_0=commit.gpgsign$' "$SHIM_LOG"
@@ -515,8 +516,8 @@ bare_path() {
   # otherwise a tampered copy would be waiting for the next launch to read
   [[ "$cfg" == *"\"denyWrite\": [\"$wt/.hgt/srt.json\""* ]]
   # .git/config is in the SHARED common dir: core.pager/core.hooksPath written there would execute
-  # on the HOST next time the human runs git in this repo. config.worktree is the same door, and is
-  # NOT in SRT's own mandatory-deny list, so hgt names it.
+  # on the HOST next time the human runs git in this repo. SRT protects these for a repo it's
+  # given, but not for a bare git dir handed to it as an allowWrite root — so hgt names them.
   [[ "$cfg" == *"\"$wt/.git/config\""* ]]
   [[ "$cfg" == *"\"$wt/.git/hooks\""* ]]
   [[ "$cfg" == *'"allowGitConfig": false'* ]]
@@ -569,42 +570,6 @@ bare_path() {
   [[ "$cfg" != *"/definitely/not/here"* ]]
   [[ "$cfg" == *"\"$HOME/.gitconfig\""* ]]   # the ones that do exist still land
   [[ "$cfg" == *"\"$HOME/.claude\""* ]]
-}
-
-@test "sandbox: the egress allowlist is the Anthropic API plus the worktree's own remote" {
-  work_env
-  # a credentialed, ported remote — the shape that made PR #90's parser leak a token onto the argv
-  # and then never match. Userinfo and port must both be gone: SRT rejects a pattern containing ':'.
-  SHIM_GIT_REMOTE_URL='https://x-access-token:ghp_SEKRET@github.com:443/cesutherland/hgt.git' \
-    run "$HGT_BIN" work 5 --no-tmux
-  [ "$status" -eq 0 ]
-  local cfg; cfg=$(srt_cfg)
-  # github.com serves fetch/push over https; api.github.com serves `gh pr create` (#81). Both, and
-  # nothing else beyond the Anthropic API.
-  [[ "$cfg" == *'"allowedDomains": ["api.anthropic.com","github.com","api.github.com"]'* ]]
-  [[ "$cfg" != *"ghp_SEKRET"* ]]
-  ! grep -q 'ghp_SEKRET' "$SHIM_LOG"
-}
-
-@test "sandbox: an scp-style remote and an unparseable one both degrade safely" {
-  work_env
-  SHIM_GIT_REMOTE_URL='git@gitlab.example.com:team/repo.git' run "$HGT_BIN" work 5 --no-tmux
-  [ "$status" -eq 0 ]
-  # GitHub Enterprise and friends serve their API off the same host, so no api. sibling is invented
-  [[ "$(srt_cfg)" == *'"allowedDomains": ["api.anthropic.com","gitlab.example.com"]'* ]]
-
-  # a local-path remote contributes nothing rather than a bogus pattern srt would reject outright
-  rm -rf "$TMP/wt"; : >"$SHIM_LOG"
-  SHIM_GIT_REMOTE_URL='../mirror.git' run "$HGT_BIN" work 5 --no-tmux
-  [ "$status" -eq 0 ]
-  [[ "$(srt_cfg)" == *'"allowedDomains": ["api.anthropic.com"]'* ]]
-}
-
-@test "sandbox: HGT_SANDBOX_EGRESS_ALLOW extends the allowlist (dogfooding seam)" {
-  work_env
-  HGT_SANDBOX_EGRESS_ALLOW='registry.npmjs.org' run "$HGT_BIN" work 5 --no-tmux
-  [ "$status" -eq 0 ]
-  [[ "$(srt_cfg)" == *'"registry.npmjs.org"'* ]]
 }
 
 @test "sandbox: fails closed with the AppArmor remediation when userns is blocked" {
@@ -680,18 +645,6 @@ bare_path() {
   [ "$status" -eq 0 ]
   ! grep -q '^srt ' "$SHIM_LOG"
   ! grep -q '^tmux send-keys' "$SHIM_LOG"
-}
-
-@test "sandbox: the settings file and scratch dir stay out of git's way (#95)" {
-  work_env
-  run "$HGT_BIN" work 5 --no-tmux
-  [ "$status" -eq 0 ]
-  # Both are generated per launch and must never be committable: an untracked file here would make
-  # every worktree read as dirty, and `hgt work rm` refuses a dirty worktree — permanently.
-  [ -f "$TMP/wt/5-add-widget/.hgt/srt.json" ]
-  [ -d "$TMP/wt/5-add-widget/.hgt/tmp" ]
-  grep -qx 'srt.json' "$HGT_REPO/templates/hgt-gitignore"
-  grep -qx 'tmp/'     "$HGT_REPO/templates/hgt-gitignore"
 }
 
 @test "sandbox: the settings file is rewritten on every launch, never left stale" {

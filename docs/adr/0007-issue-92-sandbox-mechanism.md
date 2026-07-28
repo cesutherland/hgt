@@ -101,61 +101,26 @@ bubblewrap too), so #72 survives unchanged.
 (In the event none of those files needed deleting: they only ever existed on PR #90's branch,
 which was closed unmerged. Implementing #95 was purely additive on `lib/sandbox.sh`.)
 
-## Amendment — implementation notes (#95)
+## Amendment — what #95 found (0.0.67)
 
-Measured against 0.0.67 while implementing, since several decisions below were contingent on
-behaviour the spike could only guess at. Re-run these when the pin moves.
+Three things the spike could not have known, each of which shaped the implementation. Re-check
+them when the pin moves.
 
-- **The env really is inherited.** A `GH_TOKEN` exported in the calling shell shows up
-  unmodified inside the jail. There is no default `unsetEnvVars` denylist — it is `?? []`
-  throughout — so `credentials.envVars` drops only what you name. `env -i` is therefore load-
-  bearing, not belt-and-braces. Confirmed both ways: same run under `env -i`, `GH_TOKEN` unset.
-  It also means SRT ships no surprise denial of `GITHUB_TOKEN`, so #81's push path survives.
-- **`denyRead` surfaces as `ENOENT`, not `EACCES`.** A denied file reads as "No such file or
-  directory". Git and friends shrug at a missing optional config rather than fataling, so the
-  blanket `denyRead: [$HOME]` doesn't need per-tool exceptions to avoid hard failures.
-- **`socket(AF_UNIX)` is blocked by seccomp** (`EPERM`). This matters more than it looks:
-  `--unshare-net` does *not* isolate unix sockets, and an agent that reaches the host's tmux
-  control socket can `send-keys` into the human's other panes — unconfined host execution, which
-  would defeat the entire slice. SRT closes it structurally. But the README says the block
-  *fails open with a warning* when seccomp is unavailable, so `lib/sandbox.sh` also names
-  `/tmp/tmux-<uid>` and `/run/user/<uid>` in `denyRead`. Belt and braces, cheap.
-- **The arg quoter is a correct POSIX single-quoter** (`src/utils/shell-quote.ts`), so #25's
-  prompt — `'`, `$`, backtick, literal newline — survives SRT's re-quote for its own `bash -c`
-  byte-for-byte. Had it been the backslash style, `\`+newline would be a line continuation and
-  the newline would vanish. The conformance suite cannot catch this (its `srt` shim just
-  `exec`s), which is the sharpest argument for enforcing the pin rather than warning about it.
-- **There is no `--bind-try` equivalent.** ADR 0005 bound optional deps with `--ro-bind-try` /
-  `--bind-try`, so an absent `~/.gitconfig.local` was silently skipped. SRT passes settings paths
-  to bwrap verbatim, and a missing one aborts the launch outright ("Can't bind mount ...: No such
-  file or directory"). `lib/sandbox.sh` filters every optional path through `_sandbox_extant`
-  first. Found by running the generated settings through the real srt; the conformance suite
-  could not have caught it, since the shim never binds anything.
-- **`srt --version` is useless**: it prints `process.env.npm_package_version || '1.0.0'`, so
-  outside an npm lifecycle script it always says `1.0.0`. The pin check resolves the bin through
-  its symlink and walks up to the package manifest instead.
-- **Proxy variables are set in both cases** (`HTTPS_PROXY` and `https_proxy`, `ALL_PROXY` and
-  `all_proxy`), so curl's deliberate lowercase-only handling of `http_proxy` isn't a problem.
-- **The allowlist enforces.** An unlisted host fails to connect; `api.anthropic.com` returns
-  its normal 401. `strictAllowlist: true` is set so an unlisted host is denied outright instead
-  of being referred to an ask-callback, which in a detached tmux pane would hang or auto-allow.
+- **Adopting SRT forces a network decision.** `network` is a required settings key and the Linux
+  jail always drops the net namespace, so there is no "leave egress alone" mode to defer with.
+  #95 therefore ships a fixed `allowedDomains` constant — the API the agent talks to and the
+  forge it pushes to — and leaves deriving it, and the seam to extend it, to **#74**.
+- **There is no `--bind-try` equivalent.** ADR 0005 bound optional deps with `--ro-bind-try`, so
+  an absent `~/.gitconfig.local` was silently skipped. SRT passes settings paths to bwrap
+  verbatim and a missing one aborts the launch, so every optional path is filtered for existence
+  first.
+- **SRT's mandatory `.git/config` and `.git/hooks` protection does not apply to a bare git dir**
+  handed to it as an `allowWrite` root, which is exactly what a worktree setup does. Those denies
+  have to be named explicitly, or a jailed agent can write a `core.pager` that executes on the
+  **host**. The cost of keeping `allowGitConfig: false` is that `git push -u` fails in the jail.
 
-The generated settings file was then run through real `srt` end to end. Every boundary holds:
-writes land in the worktree, the jail cannot rewrite its own policy or the shared `.git/config`,
-`~/.bashrc` is unreadable, `example.com` is blocked while `api.anthropic.com` (401) and
-`github.com` (200) are reachable.
-
-Two decisions departed from the sketch in the Decision section:
-
-- **`allowWrite` does not include `/tmp`.** That would hand the agent write access to the tmux
-  control socket. `TMPDIR` points at a private dir inside the worktree instead. `/tmp` stays
-  *readable* — SRT stages its own proxy socket there when `XDG_RUNTIME_DIR` is unset, which
-  `env -i` guarantees.
-- **The settings file is `<worktree>/.hgt/srt.json` as planned, but is rewritten unconditionally
-  every launch and listed in its own `denyWrite`.** It sits inside the agent's own write grant,
-  so a never-clobber write would let a tampered policy survive to the next launch. A stamped
-  `.hgt/.gitignore` keeps it and the scratch dir out of `git status` — without that, every
-  worktree reads as dirty and `hgt work rm` refuses to tear it down, permanently.
+The `env -i` mitigation below was confirmed the hard way: a `GH_TOKEN` exported in the calling
+shell does reach the jail without it, and SRT ships no default `unsetEnvVars`.
 
 ## Consequences / residuals
 
@@ -189,33 +154,16 @@ Two decisions departed from the sketch in the Decision section:
 - **#75 changes shape.** Confining the `.git` bind becomes an `allowWrite`/`denyWrite` pair
   instead of selective bwrap re-binds — likely simpler, still its own slice.
 - **`git push -u` does not work in the jail**, nor does `gh pr create`'s fork disambiguation:
-  both write `.git/config`, and `allowGitConfig` stays `false`. That is deliberate, not an
-  oversight — `.git/config` lives in the *shared* common dir, so `core.pager` / `core.hooksPath`
-  written by the jailed agent would execute on the **host** the next time the human runs git in
-  that repo. `git push origin HEAD` is the workaround. `config.worktree` gets an explicit
-  `denyWrite` because it is *not* in SRT's mandatory list and would reopen the same door.
-- **ssh remotes are unreachable.** `--unshare-net` plus a CONNECT proxy means ssh cannot work at
-  all, so `git@…` is rewritten to https unconditionally (not only when a push token is present) —
-  otherwise a token-less jail has *zero* remote access and even `git fetch` hangs rather than
-  failing. Anonymous https fetch works for a public repo; a private one fails with a legible
-  auth error.
-- **`~/.cache` and `~/.npm` are unreadable and unwritable**, so in-jail `npm install` / `npx`
-  will need `HGT_SANDBOX_RO_BIND` entries. Expected first friction on a live run; a config
-  change, not code.
-- **The PAT reaches SRT's own host-side proxy process.** The payload is sourced before `exec
-  srt`, so the proxy inherits `GITHUB_TOKEN` too. Same uid, same user, so it grants nothing the
-  caller didn't already have — but it is a wider blast radius than `bwrap --args` had, and the
-  `credentials.envVars` `mask` mode above is the eventual fix.
-- **`env -i` is an approximation of `--clearenv`, not an equivalent.** The pane's dash re-adds
-  `PWD` on the way through, and SRT overlays its proxy variables. Neither carries anything the
-  agent didn't already know.
-- **IPv6 remote URLs mis-parse.** `https://[2001:db8::1]:443/x.git` yields `[2001`, which SRT
-  rejects as a domain pattern. Nobody has one; documented rather than handled.
-- **Live validation is partial.** The static and single-command behaviours above are measured
-  (see the amendment). What still needs a real `hgt work` run: whether claude's TUI gets a
-  usable pty through SRT's `bash -c` spawn, whether the jail dies with its parent the way
-  `--die-with-parent` guaranteed, and which hosts beyond `api.anthropic.com` claude actually
-  needs (statsig/sentry telemetry, OAuth refresh) before `HGT_SANDBOX_EGRESS_ALLOW` stops being
-  necessary.
+  both write `.git/config`, which stays denied (see the amendment). `git push origin HEAD` works.
+- **ssh remotes are unreachable**, so `git@…` is rewritten to https unconditionally — otherwise a
+  token-less jail has *zero* remote access and even `git fetch` hangs rather than failing.
+- **`~/.cache` and `~/.npm` are unreadable**, so in-jail `npm install` / `npx` will need
+  `HGT_SANDBOX_RO_BIND` entries. Expected first friction; config, not code.
+- **The PAT reaches SRT's own host-side proxy process**, which inherits the environment. Same
+  uid, so it grants nothing the caller didn't have, but it is wider than `bwrap --args` was —
+  the `credentials.envVars` `mask` mode above is the eventual fix.
+- **Live validation is partial.** The filesystem and egress boundaries are verified end to end
+  against real `srt`. Still unproven: whether claude's TUI gets a usable pty through SRT's
+  spawn, and whether the jail dies with its parent the way `--die-with-parent` guaranteed.
 - **ADR numbering:** PR #90 authored its ADR as 0006, which was already taken by the
   review-response skill (#19, merged in PR #91). This is 0007.

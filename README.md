@@ -111,25 +111,24 @@ hgt work <n>             # local execution: worktree + Claude session for issue 
   as security-sensitive code.
 - **`hgt work <n>`** creates a git worktree and a named Claude session (in a detached tmux
   session by default; `--no-tmux` launches inline), wires in the frozen snapshot, and
-  handles teardown / `--resume`. The Claude session is **sandboxed** to its worktree and to
-  an egress allowlist (issues #67 + #74, [ADR 0007](docs/adr/0007-issue-92-sandbox-mechanism.md)
-  superseding ADR 0005's mechanism). `hgt` generates a settings file and hands it to a pinned
+  handles teardown / `--resume`. The Claude session is **sandboxed** to its worktree
+  (issue #67, [ADR 0007](docs/adr/0007-issue-92-sandbox-mechanism.md) superseding ADR 0005's
+  mechanism). `hgt` generates a settings file and hands it to a pinned
   [`@anthropic-ai/sandbox-runtime`](https://www.npmjs.com/package/@anthropic-ai/sandbox-runtime)
   (`srt`), which builds the jail: worktree + shared `.git` read-write, the rest of `$HOME`
-  (`~/.ssh`, admin `gh` auth, sibling repos) unreadable, and network limited to the Anthropic
-  API plus the worktree's own git remote. tmux and the human's shell pane stay on the host, so
-  `tmux attach` is untouched. On by default and fail-closed; `--no-sandbox` opts out.
-  - **Egress holds because the net namespace is gone**, not because `HTTPS_PROXY` is set: the
-    jail reaches SRT's proxy over a forwarded unix socket, so a process that ignores the proxy
-    variables gets *no* network rather than an unfiltered one.
+  (`~/.ssh`, admin `gh` auth, sibling repos) unreadable, while tmux and the human's shell pane
+  stay on the host so `tmux attach` is untouched. On by default and fail-closed; `--no-sandbox`
+  opts out.
   - **Setup:** `npm i -g @anthropic-ai/sandbox-runtime@0.0.67` plus
     `sudo apt install bubblewrap socat ripgrep`. The version is pinned exactly — SRT is pre-1.0,
     and a mismatch fails closed with the install command (`HGT_SANDBOX_SRT_VERSION=` skips the
     check). On Ubuntu 24.04+ install the one-time AppArmor profile first; the preflight prints
     how. Every missing piece dies with its own remediation rather than launching unconfined.
-  - **Seams**, all space-separated: `HGT_SANDBOX_SETENV` (extra env vars into the jail),
-    `HGT_SANDBOX_RO_BIND` (extra readable paths), `HGT_SANDBOX_EGRESS_ALLOW` (extra hosts).
-    Reach for these before widening the defaults in `lib/sandbox.sh`.
+  - **Egress:** SRT's jail always drops the net namespace, so hgt has to name the hosts the
+    agent may reach. Today that's a fixed list (the Anthropic API and GitHub); deriving it from
+    the worktree's own remote is [#74](https://github.com/cesutherland/hgt/issues/74).
+  - **Seams:** `HGT_SANDBOX_SETENV` (extra env vars into the jail) and `HGT_SANDBOX_RO_BIND`
+    (extra readable paths), both space-separated. Reach for these before widening the defaults.
   - **Publish boundary (issue #81):** by default the jail holds **no push credential**, so
     the agent's commits dead-end locally. Set `HGT_SANDBOX_GITHUB_TOKEN` to a scoped
     machine-user PAT and the jail gains a credentialed push/PR path (`git@`→https, plus a git
@@ -137,8 +136,7 @@ hgt work <n>             # local execution: worktree + Claude session for issue 
     runs. The token is delivered as an environment variable **into** the jail by sourcing an
     unlinked file descriptor, so its value never touches the argv, the command echo, the tmux
     pane, or `/proc/<pid>/cmdline`, and it dies with the process (no persistent on-disk secret).
-    Its #74 precondition is now met: the allowlist is what makes a live token in the jail a
-    bounded risk rather than an open exfiltration channel.
+    **Precondition:** a token usable in the jail wants egress locked down (issue #74).
   - **Known friction:** `.git/config` is not writable (it lives in the *shared* git dir, where
     a `core.pager` written by the agent would execute on the **host**), so use
     `git push origin HEAD`, not `git push -u`. `/tmp` is not writable either — `TMPDIR` points
@@ -150,9 +148,8 @@ The conformance suite is [bats](https://github.com/bats-core/bats-core); run it 
 `./test/run.sh`. It's hermetic — external commands (`gh`/`git`/`tmux`/`claude`/`srt`/`bwrap`/
 `socat`/`rg`) are PATH-shimmed in `test/shims/`, so there's no network, no secrets, and no real
 repo mutation. Shims are **files**, never exported bash functions: `setsid`/`exec` walk straight
-past a function, which is how three tests once passed while doing nothing (PR #90). The `srt`
-shim is a symlink into `test/fixtures/srt-pkg/`, a real npm-shaped package layout, so the
-version-pin check is exercised rather than stubbed.
+past a function. The `srt` shim is a symlink into `test/fixtures/srt-pkg/`, a real npm-shaped
+package layout, so the version-pin check is exercised rather than stubbed.
 
 CI (`.github/workflows/ci.yml`) runs that suite on every PR to `main` and reports a
 `test` status check. Per spec §3 the workflow is deliberately poor and powerless:
