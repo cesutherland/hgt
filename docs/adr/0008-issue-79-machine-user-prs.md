@@ -88,8 +88,8 @@ runner holding nothing worth stealing.
 
 ## Consequences / residuals
 
-- **A resident credential in the injection surface — tracked as its own slice.** Unlike
-  `GITHUB_TOKEN`, the PAT outlives the job, and checkout writes it into the workspace
+- **A resident credential in the injection surface — #110.** Unlike `GITHUB_TOKEN`, the PAT
+  outlives the job, and checkout writes it into the workspace
   `.git/config` where the agent can read it and echo it into the world-readable transcript
   artifact (#64). Scope is what bounds it today: push branches, open PRs, no merge, no approve,
   no private repos, branch protection still owns `main` — injection that succeeds buys the
