@@ -16,6 +16,17 @@ work_env() {
   unset TMUX
   export HGT_WORKTREE_DIR="$TMP/wt"
   export HGT_REPO_NAME=hgt
+  # The jail launches under `env -i` (ADR 0007), which wipes $SHIM_LOG along with everything else —
+  # so the shims that run *inside* it (srt, and claude through it) get it back the same way a real
+  # user would add NVM_DIR: through the HGT_SANDBOX_SETENV seam. No back door for the suite.
+  export HGT_SANDBOX_SETENV='SHIM_LOG'
+  # A fixture $HOME. The generated settings name only paths that exist (SRT has no `--bind-try`
+  # equivalent — an absent path aborts the launch), so without this the settings assertions would
+  # read differently on every developer's box depending on whether they happen to have a
+  # ~/.gitconfig.local. Everything _SANDBOX_RO_DEPS/_SANDBOX_RW_DEPS names is present here.
+  export HOME="$TMP/home"
+  mkdir -p "$HOME/.nvm" "$HOME/.local" "$HOME/.config/git" "$HOME/.claude"
+  : >"$HOME/.gitconfig"; : >"$HOME/.gitconfig.local"; : >"$HOME/.claude.json"
   export SHIM_GH_OUT='number=5
 url=https://github.com/cesutherland/hgt/issues/5
 title=Add a Widget
@@ -119,8 +130,8 @@ Wire it up.'
   grep -q "^tmux new-session -d -s hgt/5-add-widget -c $TMP/wt/5-add-widget\$" "$SHIM_LOG"
   # claude launched *into* that shell via send-keys (#47) — not as the pane's PID 1, so a
   # claude exit/failure leaves the session alive with a live shell, not an evaporated session.
-  # Confined by the bwrap jail (#67): the sandbox prefix wraps the claude command.
-  grep -q "^tmux send-keys -t hgt/5-add-widget 'bwrap' .* claude -n 'hgt/5-add-widget' .* Enter\$" "$SHIM_LOG"
+  # Confined by the jail (#67/#74): the sandbox prefix (`env -i … srt …`) wraps the claude command.
+  grep -q "^tmux send-keys -t hgt/5-add-widget 'env' '-i' .* 'srt' .* claude -n 'hgt/5-add-widget' .* Enter\$" "$SHIM_LOG"
   # outside tmux -> attach, not switch-client
   grep -q '^tmux attach-session -t hgt/5-add-widget$' "$SHIM_LOG"
   ! grep -q '^tmux switch-client' "$SHIM_LOG"
@@ -161,14 +172,17 @@ Wire it up.'
   # which is where the bug lived; it doesn't run a pty, but for _shq's single-quoted content the
   # two converge — a newline inside the open '...' is line continuation in a real pane too, not an
   # early submit, so the argv is identical (manually verified against tmux, see PR #49). A broken
-  # quote would instead split the prompt, run `id`, or die on a syntax error. The sandbox (#67)
-  # prefixes the keys with an _shq'd bwrap jail; a passthrough bwrap() drops its args up to the
+  # quote would instead split the prompt, run `id`, or die on a syntax error. The sandbox (#67/#74)
+  # prefixes the keys with an _shq'd `env -i … srt …`; a passthrough env() drops its args up to the
   # wrapped command, so the same reconstruction proves quoting survives the full jailed command.
+  # (srt re-quotes its argv for its own `bash -c`, with a POSIX single-quoter — verified against
+  # 0.0.67 that this prompt survives that second pass byte-for-byte. That's a pinned-version
+  # property, which is why _SANDBOX_SRT_VERSION is enforced rather than advisory.)
   run /bin/sh -c 'claude() {
       printf "%s" "$2" >'"$TMP"'/got_name
       printf "%s" "$3" >'"$TMP"'/got_prompt
     }
-    bwrap() { while [ "$1" != claude ]; do shift; done; "$@"; }
+    env() { while [ "$1" != claude ]; do shift; done; "$@"; }
     '"$(cat "$TMP/keys")"
   [ "$status" -eq 0 ]
   [ "$(cat "$TMP/got_name")" = hgt/5-add-widget ]
@@ -427,60 +441,127 @@ Build the widget.'
   grep -q '^tmux kill-session -t hgt/5-add-widget$' "$SHIM_LOG"
 }
 
-# --- sandbox (#67, ADR 0005) -------------------------------------------------------------------
-# The jail is part of hgt's contract now: which bwrap flags it wraps claude in, and that it fails
-# closed rather than launch an unconfined agent. The bwrap shim execs the wrapped command, so the
-# claude-level assertions above already prove the jail is transparent; these pin the jail itself.
+# --- sandbox (#67 + #74, ADR 0007) -------------------------------------------------------------
+# The jail is part of hgt's contract: the settings file it generates for srt, the environment it
+# hands the jail, and that it fails closed rather than launch an unconfined agent. The srt shim
+# execs the wrapped command, so the claude-level assertions above already prove the jail is
+# transparent; these pin the jail itself.
+#
+# Two log streams from the srt shim: `srt <argv>` (what hgt invoked) and `srt-env <NAME>=<value>`
+# (the environment the jail actually receives). The second is the interesting one — the env is
+# where SRT is weakest (its credentials.envVars is a denylist, so it never clears anything), so
+# `env -i` is hgt's own control and it deserves to be asserted on the delivered result, not on the
+# argv that was supposed to produce it.
 
-@test "sandbox: the jail binds the worktree + shared .git rw, tmpfs's \$HOME, and clears the env" {
-  work_env  # sandbox on by default
-  run "$HGT_BIN" work 5 --no-tmux  # inline path -> bwrap prefix lands on its own log line
-  [ "$status" -eq 0 ]
-  local bw; bw=$(grep '^bwrap ' "$SHIM_LOG")
-  # worktree read-write, and the repo's shared .git (resolved via git rev-parse) read-write
-  [[ "$bw" == *"--bind $TMP/wt/5-add-widget $TMP/wt/5-add-widget"* ]]
-  [[ "$bw" == *"--bind $TMP/wt/5-add-widget/.git $TMP/wt/5-add-widget/.git"* ]]
-  # $HOME is a tmpfs (the boundary) and the env starts empty
-  [[ "$bw" == *"--tmpfs $HOME"* ]]
-  [[ "$bw" == *"--clearenv"* ]]
-  # DNS survives: the systemd-resolved dir is bound so /etc/resolv.conf's symlink resolves
-  [[ "$bw" == *"--ro-bind-try /run/systemd/resolve /run/systemd/resolve"* ]]
-  # gpg-signing forced off inside — the agent has no ~/.gnupg, can't sign as the human
-  [[ "$bw" == *"--setenv GIT_CONFIG_KEY_0 commit.gpgsign"* ]]
-  [[ "$bw" == *"GIT_CONFIG_VALUE_0 false"* ]]
+# srt_cfg — the generated settings file for issue 5's worktree.
+srt_cfg() { cat "$TMP/wt/5-add-widget/.hgt/srt.json"; }
+
+# bare_path — a PATH holding every shim EXCEPT $1, plus the coreutils hgt shells out to. The
+# system dirs can't just be appended: bwrap/socat/rg are plausibly installed for real on a dev box,
+# so `type -P` would find them and the missing-dependency path would never be reached.
+bare_path() {
+  local f n
+  mkdir -p "$TMP/bin"
+  for f in "$HGT_REPO"/test/shims/*; do
+    n=$(basename "$f")
+    case "$n" in _shim | "$1") continue ;; esac
+    ln -sf "$f" "$TMP/bin/$n"
+  done
+  for n in sh bash env printenv mkdir rmdir rm cp mv ln find sed grep head tail tr cut sort uniq \
+           id readlink realpath mktemp dirname basename cat chmod stat date true false wc diff; do
+    [ -x "/usr/bin/$n" ] && ln -sf "/usr/bin/$n" "$TMP/bin/$n"
+  done
+  printf '%s' "$TMP/bin"
 }
 
-@test "sandbox: the jail never binds ~/.ssh or the admin gh auth" {
+@test "sandbox: the settings file denies \$HOME reads and re-allows only the worktree + deps" {
+  work_env  # sandbox on by default
+  run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  local wt="$TMP/wt/5-add-widget" cfg; cfg=$(srt_cfg)
+  # srt is pointed at the generated file, and `--` ends srt's own options so claude's -n is claude's
+  grep -q "^srt --settings $wt/.hgt/srt.json -- claude -n hgt/5-add-widget " "$SHIM_LOG"
+  # THE boundary: reads default to allowed in SRT, so $HOME is denied wholesale and allowed back
+  # piecemeal. The worktree lives under $HOME on a normal setup, hence the explicit re-allow.
+  [[ "$cfg" == *"\"denyRead\": [\"$HOME\""* ]]
+  [[ "$cfg" == *"\"allowRead\": [\"$wt\",\"$wt/.git\","* ]]
+  # worktree + the repo's shared .git (resolved via git rev-parse) are the only writable tree,
+  # alongside claude's own state
+  [[ "$cfg" == *"\"allowWrite\": [\"$wt\",\"$wt/.git\",\"$HOME/.claude\",\"$HOME/.claude.json\"]"* ]]
+  # git identity is readable, so commits carry the human's name without a writable ~/.gitconfig
+  [[ "$cfg" == *"\"$HOME/.gitconfig\""* ]]
+  # SRT always drops the net namespace and requires a network block, so the swap can't be
+  # network-neutral. This fixed list is a placeholder — deriving it belongs to #74.
+  [[ "$cfg" == *'"allowedDomains": ["api.anthropic.com","github.com","api.github.com"]'* ]]
+  [[ "$cfg" == *'"strictAllowlist": true'* ]]
+  # gpg-signing forced off inside — the agent has no ~/.gnupg, can't sign as the human
+  grep -q '^srt-env GIT_CONFIG_KEY_0=commit.gpgsign$' "$SHIM_LOG"
+  grep -q '^srt-env GIT_CONFIG_VALUE_0=false$'        "$SHIM_LOG"
+}
+
+@test "sandbox: the jail can't read ~/.ssh or the admin gh auth, and can't rewrite its own policy" {
   work_env
   run "$HGT_BIN" work 5 --no-tmux
   [ "$status" -eq 0 ]
-  local bw; bw=$(grep '^bwrap ' "$SHIM_LOG")
-  # the two secrets the acceptance criteria name: never mounted, so unreachable by construction
-  [[ "$bw" != *".ssh"* ]]
-  [[ "$bw" != *".config/gh"* ]]
+  local wt="$TMP/wt/5-add-widget" cfg; cfg=$(srt_cfg)
+  # the two secrets the acceptance criteria name: under the denied $HOME and never allowed back,
+  # so they're unreachable without hgt having to enumerate them
+  [[ "$cfg" != *".ssh"* ]]
+  [[ "$cfg" != *".config/gh"* ]]
+  # the settings file sits inside the agent's own write grant, so it denies writes to itself —
+  # otherwise a tampered copy would be waiting for the next launch to read
+  [[ "$cfg" == *"\"denyWrite\": [\"$wt/.hgt/srt.json\""* ]]
+  [[ "$cfg" == *'"allowGitConfig": false'* ]]
+  # host IPC: --unshare-net doesn't isolate AF_UNIX, and an agent that reaches the tmux control
+  # socket can send-keys into the human's other panes — unconfined host execution
+  [[ "$cfg" == *"\"/tmp/tmux-$(id -u)\""* ]]
+  [[ "$cfg" == *"\"/run/user/$(id -u)\""* ]]
 }
 
-@test "sandbox: a host-exported secret does not cross --clearenv; HGT_SANDBOX_SETENV opts one in" {
+@test "sandbox: a host-exported secret does not reach the jail; HGT_SANDBOX_SETENV opts one in" {
   work_env
-  # the guardrail: env crosses the jail only via the curated allowlist. A shell-exported secret
-  # must NOT surface as --setenv — this is the test that catches "fixing friction" by widening
+  # THE guardrail. SRT never clears the environment — its credentials.envVars is a denylist, so it
+  # can only drop variables you thought to name. hgt keeps ADR 0005's strictly stronger allowlist
+  # by invoking srt under `env -i`. This is the test that catches "fixing friction" by widening
   # _SANDBOX_ENV_PASS instead of using the HGT_SANDBOX_SETENV seam.
   TERM=xterm GH_TOKEN=sekret AWS_SECRET_ACCESS_KEY=sekret \
-    HGT_SANDBOX_SETENV=NVM_DIR NVM_DIR=/opt/nvm \
+    HGT_SANDBOX_SETENV='SHIM_LOG NVM_DIR' NVM_DIR=/opt/nvm \
     run "$HGT_BIN" work 5 --no-tmux
   [ "$status" -eq 0 ]
-  local bw; bw=$(grep '^bwrap ' "$SHIM_LOG")
-  [[ "$bw" != *"GH_TOKEN"* ]]
-  [[ "$bw" != *"AWS_SECRET_ACCESS_KEY"* ]]
-  [[ "$bw" == *"--setenv TERM "* ]]                 # allowlisted vars still pass
-  [[ "$bw" == *"--setenv NVM_DIR /opt/nvm"* ]]      # the explicit opt-in seam works
+  # asserted against the environment the jail actually received, not the argv that built it
+  ! grep -q '^srt-env GH_TOKEN='              "$SHIM_LOG"
+  ! grep -q '^srt-env AWS_SECRET_ACCESS_KEY=' "$SHIM_LOG"
+  grep -q '^srt-env TERM=xterm$'      "$SHIM_LOG"   # allowlisted vars still pass
+  grep -q '^srt-env NVM_DIR=/opt/nvm$' "$SHIM_LOG"  # the explicit opt-in seam works
+  # /tmp isn't writable in the jail, so temp state goes to a private dir inside the worktree — and
+  # gh gets a scratch config dir rather than reaching for the admin one the jail exists to hide
+  grep -q "^srt-env TMPDIR=$TMP/wt/5-add-widget/.hgt/tmp\$"         "$SHIM_LOG"
+  grep -q "^srt-env GH_CONFIG_DIR=$TMP/wt/5-add-widget/.hgt/tmp/gh\$" "$SHIM_LOG"
 }
 
-@test "sandbox: HGT_SANDBOX_RO_BIND extends the read-only binds (dogfooding seam)" {
+@test "sandbox: HGT_SANDBOX_RO_BIND extends the readable paths (dogfooding seam)" {
   work_env
-  HGT_SANDBOX_RO_BIND=/opt/toolchain run "$HGT_BIN" work 5 --no-tmux
+  mkdir -p "$TMP/toolchain"
+  HGT_SANDBOX_RO_BIND="$TMP/toolchain" run "$HGT_BIN" work 5 --no-tmux
   [ "$status" -eq 0 ]
-  grep '^bwrap ' "$SHIM_LOG" | grep -q -- '--ro-bind-try /opt/toolchain /opt/toolchain'
+  [[ "$(srt_cfg)" == *"\"$TMP/toolchain\""* ]]
+}
+
+@test "sandbox: paths that don't exist are omitted, not named (SRT has no --bind-try)" {
+  work_env
+  # ADR 0005 used --ro-bind-try/--bind-try, so an absent ~/.gitconfig.local was silently skipped.
+  # SRT has no equivalent: naming a path that isn't there aborts the launch with
+  # "bwrap: Can't bind mount ...: No such file or directory". Optional deps are machine-specific
+  # by nature, so this is the difference between "works on a fresh box" and "doesn't".
+  rm -f "$HOME/.gitconfig.local" "$HOME/.claude.json"
+  HGT_SANDBOX_RO_BIND=/definitely/not/here run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  local cfg; cfg=$(srt_cfg)
+  [[ "$cfg" != *".gitconfig.local"* ]]
+  [[ "$cfg" != *".claude.json"* ]]
+  [[ "$cfg" != *"/definitely/not/here"* ]]
+  [[ "$cfg" == *"\"$HOME/.gitconfig\""* ]]   # the ones that do exist still land
+  [[ "$cfg" == *"\"$HOME/.claude\""* ]]
 }
 
 @test "sandbox: fails closed with the AppArmor remediation when userns is blocked" {
@@ -495,39 +576,101 @@ Build the widget.'
   ! grep -q '^tmux new-session' "$SHIM_LOG"
 }
 
-@test "sandbox: --no-sandbox launches claude unconfined, with a warning and no bwrap" {
+@test "sandbox: fails closed with install remediation when srt/socat/rg/bwrap is missing" {
+  work_env
+  local dep
+  for dep in srt socat rg bwrap; do
+    : >"$SHIM_LOG"; rm -rf "$TMP/bin"
+    run env PATH="$(bare_path "$dep")" "$HGT_BIN" work 5
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"sandbox: $dep not found"* ]]
+    [[ "$output" == *"--no-sandbox"* ]]      # the opt-out is always named
+    ! grep -q '^claude ' "$SHIM_LOG"         # and it never launches an unconfined agent
+    # each names the command that fixes it, not just the missing file — and srt's carries the pin,
+    # so a fresh box installs the version the suite was green against
+    case "$dep" in
+      srt) [[ "$output" == *"npm i -g @anthropic-ai/sandbox-runtime@0.0.67"* ]] ;;
+      *)   [[ "$output" == *"sudo apt install "* ]] ;;
+    esac
+  done
+}
+
+@test "sandbox: an srt version other than the pin fails closed" {
+  work_env
+  # SRT is pre-1.0: its config format and its sandbox guarantees can move between patch releases,
+  # and two properties hgt depends on (the POSIX-single-quoting arg quoter, seccomp-blocked
+  # AF_UNIX) are version-specific. `srt --version` can't answer this — it reports 1.0.0 whatever is
+  # installed — so the check walks from the resolved bin up to the package manifest.
+  run env HGT_SANDBOX_SRT_VERSION=9.9.9 "$HGT_BIN" work 5
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"srt 0.0.67 is installed, but hgt pins 9.9.9"* ]]
+  [[ "$output" == *"./test/run.sh"* ]]   # the upgrade obligation, spelled out
+  ! grep -q '^claude ' "$SHIM_LOG"
+}
+
+@test "sandbox: an undeterminable srt version warns but still launches" {
+  work_env
+  # A bare srt on PATH with no package manifest above it: an install layout hgt didn't anticipate
+  # must not become the thing that blocks work. Warn loudly, jail anyway.
+  mkdir -p "$TMP/bin2"
+  cp "$HGT_REPO/test/fixtures/srt-pkg/dist/cli.js" "$TMP/bin2/srt"
+  run env PATH="$TMP/bin2:$PATH" "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"couldn't determine the installed srt version"* ]]
+  grep -q '^claude -n hgt/5-add-widget ' "$SHIM_LOG"
+}
+
+@test "sandbox: --no-sandbox launches claude unconfined, with a warning and no srt" {
   work_env
   run "$HGT_BIN" work 5 --no-tmux --no-sandbox
   [ "$status" -eq 0 ]
   [[ "$output" == *"UNCONFINED"* ]]        # loud about the trade
   grep -q '^claude -n hgt/5-add-widget ' "$SHIM_LOG"  # launched directly, as pre-#67
-  ! grep -q '^bwrap ' "$SHIM_LOG"          # no jail
+  ! grep -q '^srt ' "$SHIM_LOG"            # no jail
+  [ ! -f "$TMP/wt/5-add-widget/.hgt/srt.json" ]  # and no settings file left behind
 }
 
 @test "sandbox: a resumed live tmux session is not re-jailed (already confined at launch)" {
   work_env
-  # live session -> resume path; it must not preflight/rebuild the jail (no bwrap, no send-keys)
+  # live session -> resume path; it must not preflight/rebuild the jail (no srt, no send-keys)
   run env SHIM_TMUX_HAS_SESSION=0 "$HGT_BIN" work 5
   [ "$status" -eq 0 ]
-  ! grep -q '^bwrap ' "$SHIM_LOG"
+  ! grep -q '^srt ' "$SHIM_LOG"
   ! grep -q '^tmux send-keys' "$SHIM_LOG"
+}
+
+@test "sandbox: the settings file is rewritten on every launch, never left stale" {
+  work_env
+  "$HGT_BIN" work 5 --no-tmux >/dev/null 2>&1
+  # a tampered policy inside the agent's own write grant must not survive to the next launch
+  printf '{"network":{"allowedDomains":["evil.example.com"],"deniedDomains":[]}}' \
+    >"$TMP/wt/5-add-widget/.hgt/srt.json"
+  run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  [[ "$(srt_cfg)" != *"evil.example.com"* ]]
 }
 
 # --- credentialed publish (#81) ----------------------------------------------------------------
 # The publish boundary: by default the jail holds NO push credential — commits dead-end locally
 # (the #67 fail-closed default). HGT_SANDBOX_GITHUB_TOKEN opts in a scoped push/PR path, the SAME
-# seam attended + unattended (#17). The token is delivered as jail env via `bwrap --args <fd>`, so
-# its value never touches the argv/log/pane/cmdline and leaves no persistent on-disk secret.
+# seam attended + unattended (#17). The token is delivered as jail env by sourcing an unlinked fd
+# (ADR 0007 replaced `bwrap --args <fd>` with a one-line `sh -c` wrapper, since bwrap's argv is
+# srt's business now), so its value never touches the argv/log/pane/cmdline and leaves no
+# persistent on-disk secret.
 
 @test "publish: no token -> the jail holds no push credential (fail-closed default, #81)" {
   work_env
   run "$HGT_BIN" work 5 --no-tmux
   [ "$status" -eq 0 ]
-  local bw; bw=$(grep '^bwrap ' "$SHIM_LOG")
-  [[ "$bw" != *"--args"* ]]                        # no token payload fd
-  [[ "$bw" != *"GITHUB_TOKEN"* ]]                  # no push credential at all
-  [[ "$bw" != *"insteadOf"* ]]                     # no https rewrite / push path
-  [[ "$bw" == *"--setenv GIT_CONFIG_COUNT 1"* ]]   # only the gpgsign-off entry
+  ! grep -q '^srt-env GITHUB_TOKEN=' "$SHIM_LOG"    # no push credential at all
+  ! grep -q '^srt-env GH_TOKEN='     "$SHIM_LOG"
+  ! grep -q '/dev/fd/3' "$SHIM_LOG"                 # no token payload fd
+  ! grep -q 'credential\.helper' "$SHIM_LOG"        # and no credential helper wired up
+  # gpgsign-off + the git@ -> https rewrite. The rewrite is unconditional now: --unshare-net means
+  # ssh can't work at all (the proxy speaks CONNECT), so an ssh remote would leave even `git fetch`
+  # hanging. Over https a token-less jail still fetches a public repo anonymously.
+  grep -q '^srt-env GIT_CONFIG_COUNT=2$' "$SHIM_LOG"
+  grep -q '^srt-env GIT_CONFIG_KEY_1=url\.https://github\.com/\.insteadOf$' "$SHIM_LOG"
 }
 
 @test "publish: a scoped token is wired for push via env, value never on the argv (#81)" {
@@ -535,23 +678,21 @@ Build the widget.'
   export HGT_SANDBOX_CRED_DIR="$TMP/cred"
   run env HGT_SANDBOX_GITHUB_TOKEN=ghp_SEKRET "$HGT_BIN" work 5 --no-tmux
   [ "$status" -eq 0 ]
-  local bw; bw=$(grep '^bwrap ' "$SHIM_LOG")
-  # token injected as jail env via a fd (--args 3), NOT spelled on the command line
-  [[ "$bw" == *"--args 3"* ]]
-  [[ "$bw" != *"--setenv GITHUB_TOKEN"* ]]           # never on the argv
-  [[ "$bw" != *"--setenv GH_TOKEN"* ]]
-  # git rewrites git@ -> https and its helper reads $GITHUB_TOKEN from env — no gh, no on-disk file
-  [[ "$bw" == *"url.https://github.com/.insteadOf"* ]]
-  [[ "$bw" == *'"$GITHUB_TOKEN"'* ]]                 # helper pulls the env var
-  [[ "$bw" == *"credential.helper"* ]]               # empty reset clears any inherited helper
-  [[ "$bw" != *"gh auth git-credential"* ]]          # push path must not depend on gh
-  [[ "$bw" != *"GH_CONFIG_DIR"* ]]                   # no gh config dir anymore
-  [[ "$bw" == *"--setenv GIT_CONFIG_COUNT 4"* ]]     # gpgsign + url + helper-reset + host-helper
-  # gh still bound best-effort for `gh pr create`
-  [[ "$bw" == *"--ro-bind $(command -v gh) $(command -v gh)"* ]]
-  # the token value appears NOWHERE hgt builds/echoes...
-  ! grep -q 'ghp_SEKRET' "$SHIM_LOG"
-  # ...and the inline launch opened+unlinked the payload: no persistent on-disk secret (#2)
+  # the token reaches the jail's environment...
+  grep -q '^srt-env GITHUB_TOKEN=ghp_SEKRET$' "$SHIM_LOG"
+  grep -q '^srt-env GH_TOKEN=ghp_SEKRET$'     "$SHIM_LOG"
+  # ...without ever being spelled on a command line. `run` echoes what it executes, so the argv
+  # hgt built is in $output — the same string that would land in /proc/<pid>/cmdline.
+  [[ "$output" != *"ghp_SEKRET"* ]]
+  [[ "$output" == *". /dev/fd/3"* ]]                 # sourced from the fd instead
+  # git's helper reads $GITHUB_TOKEN from env — no gh, no on-disk credential file
+  grep -q '^srt-env GIT_CONFIG_COUNT=4$' "$SHIM_LOG"  # gpgsign + url + helper-reset + host-helper
+  grep -q '^srt-env GIT_CONFIG_VALUE_3=.*\$GITHUB_TOKEN' "$SHIM_LOG"
+  grep -q '^srt-env GIT_CONFIG_KEY_2=credential\.helper$' "$SHIM_LOG"
+  ! grep -q 'gh auth git-credential' "$SHIM_LOG"      # push path must not depend on gh
+  # gh gets a scratch config dir, never the admin one under the denied $HOME
+  grep -q "^srt-env GH_CONFIG_DIR=$TMP/wt/5-add-widget/.hgt/tmp/gh\$" "$SHIM_LOG"
+  # the inline launch opened+unlinked the payload: no persistent on-disk secret
   [ -z "$(find "$TMP/cred" -name 'hgt-args.*' 2>/dev/null)" ]
 }
 
@@ -561,20 +702,31 @@ Build the widget.'
   run env HGT_SANDBOX_GITHUB_TOKEN=ghp_SEKRET "$HGT_BIN" work 5
   [ "$status" -eq 0 ]
   local sk; sk=$(grep '^tmux send-keys' "$SHIM_LOG")
-  # the launch is wrapped in a command group: `{ rm -f <payload>; <bwrap…>; } 3< <payload>` — fd 3
-  # feeds bwrap --args 3 and closes when claude exits (not left open in the pane via `exec 3<`)
+  # the launch is wrapped in a command group: `{ rm -f <payload>; <env -i … srt …>; } 3< <payload>`
+  # — fd 3 feeds the `. /dev/fd/3` wrapper and closes when claude exits (not left open in the pane
+  # via `exec 3<`, where `cat /proc/self/fd/3` would reprint the PAT)
   [[ "$sk" == *"{ rm -f "* ]]
   [[ "$sk" == *"} 3< "* ]]
   [[ "$sk" != *"exec 3< "* ]]
-  [[ "$sk" == *"'--args' '3'"* ]]
+  [[ "$sk" == *". /dev/fd/3; exec "* ]]
   # the token value is NOT in what gets typed into the pane
   ! grep -q 'ghp_SEKRET' "$SHIM_LOG"
-  # it lives only in the mode-600 mktemp payload, NUL-separated as bwrap --setenv args
+  # it lives only in the mode-600 mktemp payload, as shell the wrapper sources
   local f; f=$(find "$TMP/cred" -name 'hgt-args.*')
   [ -n "$f" ]
   [ "$(stat -c %a "$f")" = 600 ]
-  tr '\0' '\n' <"$f" | grep -qx 'GITHUB_TOKEN'
-  tr '\0' '\n' <"$f" | grep -qx 'ghp_SEKRET'
+  grep -q "^export GITHUB_TOKEN='ghp_SEKRET' GH_TOKEN='ghp_SEKRET'\$" "$f"
+}
+
+@test "publish: a token containing a quote can't break out of the sourced payload (#81)" {
+  work_env
+  export HGT_SANDBOX_CRED_DIR="$TMP/cred"
+  # The payload is shell now, not NUL-separated bwrap args — so the escaping is load-bearing in a
+  # way it wasn't before. A token carrying `'; touch pwned; :` must stay one string.
+  run env HGT_SANDBOX_GITHUB_TOKEN="gh'; touch $TMP/pwned; :" "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  [ ! -e "$TMP/pwned" ]
+  grep -q "^srt-env GITHUB_TOKEN=gh'; touch $TMP/pwned; :\$" "$SHIM_LOG"
 }
 
 # --- token scope guard (#98) -------------------------------------------------------------------
@@ -608,7 +760,7 @@ Build the widget.'
   [[ "$output" == *"workflow"* ]]
   [[ "$output" == *"machine-user PAT"* ]]        # names the assumption
   [[ "$output" == *"merge"* ]]                   # names the risk
-  grep -q '^bwrap --die-with-parent ' "$SHIM_LOG"  # warning is not a gate: the jail still launches
+  grep -q '^srt --settings ' "$SHIM_LOG"  # warning is not a gate: the jail still launches
 }
 
 @test "publish: a public_repo-scoped token warns on a public repo (#98)" {
@@ -620,7 +772,7 @@ Build the widget.'
   [ "$status" -eq 0 ]
   [[ "$output" == *"warn:"* ]]
   [[ "$output" == *"public_repo"* ]]
-  grep -q '^bwrap --die-with-parent ' "$SHIM_LOG"  # warning is not a gate: the jail still launches
+  grep -q '^srt --settings ' "$SHIM_LOG"  # warning is not a gate: the jail still launches
 }
 
 @test "publish: a correctly fine-grained-scoped token launches without noise (#98)" {
@@ -631,7 +783,7 @@ Build the widget.'
   run env HGT_SANDBOX_GITHUB_TOKEN=ghp_SCOPED "$HGT_BIN" work 5 --no-tmux
   [ "$status" -eq 0 ]
   [[ "$output" != *"warn: sandbox: HGT_SANDBOX_GITHUB_TOKEN"* ]]
-  grep -q '^bwrap --die-with-parent ' "$SHIM_LOG"  # the claude jail launches, not just the preflight probe
+  grep -q '^srt --settings ' "$SHIM_LOG"  # the claude jail launches, not just the preflight probe
 }
 
 @test "publish: scope probe failure warns but does not block launch (#98)" {
@@ -640,5 +792,5 @@ Build the widget.'
   run env HGT_SANDBOX_GITHUB_TOKEN=ghp_BAD SHIM_GH_SCOPES_EXIT=1 "$HGT_BIN" work 5 --no-tmux
   [ "$status" -eq 0 ]
   [[ "$output" == *"couldn't probe"* ]]
-  grep -q '^bwrap --die-with-parent ' "$SHIM_LOG"  # the claude jail launches despite the probe failure
+  grep -q '^srt --settings ' "$SHIM_LOG"  # the claude jail launches despite the probe failure
 }

@@ -167,8 +167,8 @@ hgt work <n>             # local execution: worktree + Claude session for issue 
 - wire the frozen plan/snapshot into the session
 - handle teardown / `--resume`
 - **publish boundary (#81):** the sandboxed session holds no push credential by default;
-  `HGT_SANDBOX_GITHUB_TOKEN` (a scoped machine-user PAT, delivered as jail env via
-  `bwrap --args <fd>` — never on the argv/pane/cmdline, no persistent on-disk file) opts in a
+  `HGT_SANDBOX_GITHUB_TOKEN` (a scoped machine-user PAT, delivered as jail env by sourcing an
+  unlinked fd — never on the argv/pane/cmdline, no persistent on-disk file) opts in a
   push/PR path, the same seam attended + unattended. Gated on egress (#74). The "scoped" part is
   a probed assumption, not enforced against the forge: `hgt work` checks the token's
   `X-OAuth-Scopes` before launch and warns (fail-closed on clearly-admin scopes) if it looks

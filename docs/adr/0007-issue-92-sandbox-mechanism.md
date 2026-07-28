@@ -94,9 +94,29 @@ development.
 
 `templates/egress-proxy.py`, `templates/nftables/hgt-egress.nft`, the `systemd-run` scope
 wrapper, the egress pidfile lifecycle, the nftables preflight, and most of `sandbox_argv`'s
-bind list. Net host setup *decreases*: `socat` becomes a dependency, the nftables install goes
-away, and the Ubuntu AppArmor `bwrap` profile is still required (SRT uses bubblewrap too), so
-#72 survives unchanged.
+bind list. Net host setup *decreases*: `socat` and `ripgrep` become dependencies, the nftables
+install goes away, and the Ubuntu AppArmor `bwrap` profile is still required (SRT uses
+bubblewrap too), so #72 survives unchanged.
+
+(In the event none of those files needed deleting: they only ever existed on PR #90's branch,
+which was closed unmerged. Implementing #95 was purely additive on `lib/sandbox.sh`.)
+
+## Amendment — what #95 found (0.0.67)
+
+Two things the spike could not have known, each of which shaped the implementation. Re-check
+them when the pin moves.
+
+- **Adopting SRT forces a network decision.** `network` is a required settings key and the Linux
+  jail always drops the net namespace, so there is no "leave egress alone" mode to defer with.
+  #95 therefore ships a fixed `allowedDomains` constant — the API the agent talks to and the
+  forge it pushes to — and leaves deriving it, and the seam to extend it, to **#74**.
+- **There is no `--bind-try` equivalent.** ADR 0005 bound optional deps with `--ro-bind-try`, so
+  an absent `~/.gitconfig.local` was silently skipped. SRT passes settings paths to bwrap
+  verbatim and a missing one aborts the launch, so every optional path is filtered for existence
+  first.
+
+The `env -i` mitigation below was confirmed the hard way: a `GH_TOKEN` exported in the calling
+shell does reach the jail without it, and SRT ships no default `unsetEnvVars`.
 
 ## Consequences / residuals
 
@@ -129,7 +149,15 @@ away, and the Ubuntu AppArmor `bwrap` profile is still required (SRT uses bubble
   still its own slice, now expressed as `allowWrite` entries rather than bwrap binds.
 - **#75 changes shape.** Confining the `.git` bind becomes an `allowWrite`/`denyWrite` pair
   instead of selective bwrap re-binds — likely simpler, still its own slice.
-- **Live validation is still deferred**, same as ADR 0005: bwrap can't create a userns on this
-  box until the AppArmor profile lands. SRT does not change that gate.
+- **ssh remotes are unreachable**, so `git@…` is rewritten to https unconditionally — otherwise a
+  token-less jail has *zero* remote access and even `git fetch` hangs rather than failing.
+- **`~/.cache` and `~/.npm` are unreadable**, so in-jail `npm install` / `npx` will need
+  `HGT_SANDBOX_RO_BIND` entries. Expected first friction; config, not code.
+- **The PAT reaches SRT's own host-side proxy process**, which inherits the environment. Same
+  uid, so it grants nothing the caller didn't have, but it is wider than `bwrap --args` was —
+  the `credentials.envVars` `mask` mode above is the eventual fix.
+- **Live validation is partial.** The filesystem and egress boundaries are verified end to end
+  against real `srt`. Still unproven: whether claude's TUI gets a usable pty through SRT's
+  spawn, and whether the jail dies with its parent the way `--die-with-parent` guaranteed.
 - **ADR numbering:** PR #90 authored its ADR as 0006, which was already taken by the
   review-response skill (#19, merged in PR #91). This is 0007.

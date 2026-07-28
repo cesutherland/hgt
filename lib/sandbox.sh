@@ -1,39 +1,39 @@
-# sandbox.sh — confine the Claude session `hgt work` spawns to its worktree (issue #67, ADR 0005).
+# sandbox.sh — confine the Claude session `hgt work` spawns to its worktree (issue #67).
 #
-# We wrap ONLY the claude process in a bubblewrap FS jail; tmux and the human's shell pane stay
-# on the host, so `tmux attach` and "shell in if it gets dicey" survive untouched. The security
-# property is by construction: $HOME is a tmpfs, so anything not re-bound (~/.ssh, the admin
-# `gh` auth under ~/.config/gh, ~/.npmrc, sibling repos, arbitrary FS) simply isn't in the jail.
+# ADR 0007 supersedes ADR 0005's *mechanism*: instead of hand-assembling bwrap flags we generate a
+# settings file for `@anthropic-ai/sandbox-runtime` (`srt`, pinned) and let it build the jail. The
+# threat model, the wrap-claude-only constraint, and the fail-closed posture are unchanged.
 #
-# This is a shared seam: launch_session prefixes it onto claude on both the inline and tmux
-# paths, and the future local-listener executor reuses it — identical confinement, attended or
-# not (#17). Everything here is a pure argv builder + preflight; no side effects at source time.
+# We wrap ONLY the claude process; tmux and the human's shell pane stay on the host, so
+# `tmux attach` and "shell in if it gets dicey" survive untouched. This is a shared seam:
+# launch_session prefixes it onto claude on both the inline and tmux paths, and the future
+# local-listener executor reuses it — identical confinement, attended or not (#17).
 #
-# The publish boundary (#81): by default the jail holds NO push credential — commits land locally
-# and stop there. Set HGT_SANDBOX_GITHUB_TOKEN to a scoped machine-user PAT and the jail gains a
-# credentialed push/PR path (git@ -> https + a git credential helper reading $GITHUB_TOKEN), the
-# SAME seam attended and unattended (#17). The token is delivered as an env var INTO the jail via
-# `bwrap --args <fd>`, so its value never hits the argv / the `run` echo / the tmux pane / the
-# world-readable /proc cmdline, and it dies with the process (no on-disk secret). Fail-closed stays
-# the default: no token, no push power.
-#
-# That "scoped machine-user PAT" is an assumption, not an enforced property (#98): nothing
-# previously checked the token itself, so an admin/broad PAT would be consumed byte-identically
-# and hand the jailed agent the power the merge gate exists to withhold.
-# _sandbox_check_token_scope probes `X-OAuth-Scopes` before the jail launches and warns (or, on
-# clearly-admin scopes, refuses) — see that function for the detail.
+# The publish boundary (#81): by default the jail holds NO push credential. Set
+# HGT_SANDBOX_GITHUB_TOKEN to a scoped machine-user PAT and it gains a credentialed push/PR path.
+# `bwrap --args <fd>` went away with the hand-rolled argv, so the token now reaches the jail by
+# sourcing an unlinked fd — its value still never touches the argv, the pane, or /proc/<pid>/cmdline.
+# That "scoped" is an assumption, not an enforced property, so _sandbox_check_token_scope probes
+# the token's own scopes before the jail launches and warns or refuses (#98).
 
-# Runtime deps under $HOME re-bound read-only over the tmpfs. Machine-specific (node via nvm,
-# the claude launcher under ~/.local), so extend via HGT_SANDBOX_RO_BIND (space-separated,
-# $HOME-relative or absolute). See ADR 0005 "residuals".
-_SANDBOX_RO_DEPS='.nvm .local .gitconfig .gitconfig.local'
-# claude's own state + the Anthropic credential it must hold to call the API — read-write
-# because claude updates them at runtime. Unavoidable exposure (ADR 0005 residuals).
+# Pinned exactly: SRT is pre-1.0, so treat a bump as a change that re-runs the conformance suite.
+# HGT_SANDBOX_SRT_VERSION overrides; empty skips the check.
+_SANDBOX_SRT_VERSION="${HGT_SANDBOX_SRT_VERSION-0.0.67}"
+
+# `network` is a required settings key and SRT always drops the net namespace, so there is no
+# unrestricted mode to defer with. Placeholder until #74 derives it.
+_SANDBOX_ALLOWED_DOMAINS='api.anthropic.com github.com api.github.com'
+
+# Runtime deps under $HOME re-allowed for reading over the blanket `denyRead: [$HOME]`.
+# Machine-specific (node via nvm, the claude launcher under ~/.local), so extend via
+# HGT_SANDBOX_RO_BIND (space-separated, $HOME-relative or absolute).
+_SANDBOX_RO_DEPS='.nvm .local .gitconfig .gitconfig.local .config/git'
+# claude's state + the Anthropic credential it holds, read-write because claude updates them at
+# runtime. Narrowing this is #73.
 _SANDBOX_RW_DEPS='.claude .claude.json'
-# Host env vars passed through --clearenv. Deliberately thin — curated so shell-exported secrets
-# (GH_TOKEN, cloud creds) don't leak into the jail via the environment. This is the likeliest
-# first friction on a live run (a runtime that wants NVM_DIR/XDG_*/etc. won't find it); the fix
-# is a config change, not code — extend via HGT_SANDBOX_SETENV rather than widening this default.
+# Host env vars that survive into the jail. SRT never clears the environment, so hgt keeps ADR
+# 0005's allowlist by invoking srt from an `env -i` baseline. PATH is load-bearing twice over:
+# `env -i` resolves `srt` itself through the PATH it sets. Extend via HGT_SANDBOX_SETENV.
 _SANDBOX_ENV_PASS='HOME USER LOGNAME PATH TERM LANG LC_ALL LC_CTYPE'
 
 # sandbox_enabled — is the jail in force? On by default (fail closed); HGT_NO_SANDBOX=1 or the
@@ -42,26 +42,66 @@ sandbox_enabled() { [ "${HGT_NO_SANDBOX:-0}" != 1 ]; }
 
 # _sandbox_userns_ok — can bwrap actually create a user namespace here? A cheap real probe: on
 # Ubuntu 24.04 unprivileged userns is AppArmor-restricted and bwrap isn't setuid, so this fails
-# with "setting up uid map: Permission denied" until the profile (templates/apparmor/bwrap) is
-# installed. Cheaper to just try than to parse sysctls + profile state.
+# until the profile (templates/apparmor/bwrap) is installed. SRT drives bubblewrap too, so the
+# gate is unchanged by ADR 0007.
 #
 # Bind the loader dirs (/lib, /lib64) alongside /usr and exec an ABSOLUTE /usr/bin/true: it's
-# dynamically linked, so a /usr-only jail can't find its ELF interpreter under /lib64 and execvp
-# fails with ENOENT ("No such file or directory") *even when userns setup — the thing we're
-# testing — succeeded*. A too-thin probe would misread that as "userns blocked" and wrongly emit
-# the AppArmor remediation. So the probe mirrors the real jail's system binds.
+# dynamically linked, so a /usr-only jail can't find its ELF interpreter and execvp fails with
+# ENOENT *even when userns setup — the thing we're testing — succeeded*. A too-thin probe would
+# misread that as "userns blocked" and wrongly emit the AppArmor remediation.
 _sandbox_userns_ok() {
   bwrap --unshare-user --ro-bind /usr /usr --ro-bind-try /lib /lib --ro-bind-try /lib64 /lib64 \
     /usr/bin/true 2>/dev/null
 }
 
-# sandbox_preflight — fail closed with exact remediation if we can't jail. Called before every
-# sandboxed launch. Missing bwrap -> install hint; userns blocked -> the AppArmor two-liner.
+# _sandbox_srt_version — the installed SRT's version, or nothing if it can't be determined.
+# `srt --version` is useless (it prints `npm_package_version || '1.0.0'`, so always 1.0.0 outside
+# an npm script), so resolve the bin through its symlink and walk up to the package manifest.
+_sandbox_srt_version() {
+  local bin dir i
+  bin=$(type -P srt) || return 0
+  bin=$(readlink -f "$bin" 2>/dev/null) || return 0
+  dir=${bin%/*}
+  for i in 1 2 3; do
+    if grep -q '"@anthropic-ai/sandbox-runtime"' "$dir/package.json" 2>/dev/null; then
+      sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$dir/package.json" | head -1
+      return 0
+    fi
+    dir=${dir%/*}
+    [ -n "$dir" ] || return 0
+  done
+}
+
+# _sandbox_require BIN MSG — fail closed unless BIN is a real executable on PATH. `type -P`, not
+# `command -v`: command -v also matches shell functions, so a function named after the binary reads
+# as present here while srt, which spawns it, can't find it at all.
+_sandbox_require() {
+  type -P "$1" >/dev/null 2>&1 || die "sandbox: $1 not found — $2
+     hgt confines the Claude session to its worktree; it won't launch an unsandboxed agent by default (ADR 0007)."
+}
+
+# sandbox_preflight — fail closed with exact remediation if we can't jail. The userns probe goes
+# last: it forks bwrap, the others are PATH lookups.
 sandbox_preflight() {
-  if ! command -v bwrap >/dev/null 2>&1; then
-    die "sandbox: bwrap not found — install it (\`sudo apt install bubblewrap\`) or opt out with --no-sandbox.
-     hgt confines the Claude session to its worktree; it won't launch an unsandboxed agent by default (ADR 0005)."
+  _sandbox_require srt "install it (\`npm i -g @anthropic-ai/sandbox-runtime@$_SANDBOX_SRT_VERSION\`) or opt out with --no-sandbox."
+  # SRT's Linux dependencies: bwrap builds the jail, socat bridges its proxy socket into it, and
+  # ripgrep scans the write-allowed tree for files SRT protects unconditionally.
+  _sandbox_require bwrap "install it (\`sudo apt install bubblewrap\`) or opt out with --no-sandbox."
+  _sandbox_require socat "install it (\`sudo apt install socat\`) or opt out with --no-sandbox."
+  _sandbox_require rg "install ripgrep (\`sudo apt install ripgrep\`) or opt out with --no-sandbox."
+
+  if [ -n "$_SANDBOX_SRT_VERSION" ]; then
+    local have; have=$(_sandbox_srt_version)
+    if [ -z "$have" ]; then
+      warn "sandbox: couldn't determine the installed srt version (unusual install layout) — expected $_SANDBOX_SRT_VERSION"
+    elif [ "$have" != "$_SANDBOX_SRT_VERSION" ]; then
+      die "sandbox: srt $have is installed, but hgt pins $_SANDBOX_SRT_VERSION.
+       npm i -g @anthropic-ai/sandbox-runtime@$_SANDBOX_SRT_VERSION
+     To adopt $have instead: re-run ./test/run.sh, then bump _SANDBOX_SRT_VERSION in lib/sandbox.sh.
+     Or set HGT_SANDBOX_SRT_VERSION= to skip this check."
+    fi
   fi
+
   if ! _sandbox_userns_ok; then
     local profile="$HGT_ROOT/templates/apparmor/bwrap"
     die "sandbox: bwrap can't create a user namespace (Ubuntu restricts unprivileged userns).
@@ -72,92 +112,152 @@ sandbox_preflight() {
   fi
 }
 
-# sandbox_argv WT — populate the global array HGT_SANDBOX_ARGV with the bwrap prefix that jails a
-# process to worktree WT. Caller appends the real command (`claude -n ...`). A global array (not
-# stdout) so both consumers get a real argv: the inline path expands it directly, the tmux path
-# _shq-quotes each element into the send-keys string. WT must be absolute.
-sandbox_argv() {
-  local wt="$1" gitdir dep extra
+# _json_str VALUE / _json_arr [VALUE...] — JSON string / array of strings. Only \ and " need
+# escaping: every value we emit is a filesystem path or a hostname.
+_json_str() {
+  local s=$1
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  printf '"%s"' "$s"
+}
+_json_arr() {
+  local first=1 v
+  printf '['
+  for v in "$@"; do
+    [ "$first" -eq 1 ] || printf ','
+    first=0
+    _json_str "$v"
+  done
+  printf ']'
+}
+
+# _sandbox_extant [PATH...] — the arguments that actually exist, in order. SRT has no
+# `--ro-bind-try` equivalent: a settings path that doesn't exist kills the launch rather than being
+# skipped, and optional deps like ~/.gitconfig.local are absent on plenty of boxes.
+_sandbox_extant() {
+  local p
+  for p in "$@"; do [ -e "$p" ] && printf '%s\n' "$p"; done
+  return 0
+}
+
+# _sandbox_settings WT — write the settings file that defines the jail, plus the private scratch
+# dir it uses for temp state. Sets _SANDBOX_SETTINGS_FILE and _SANDBOX_SCRATCH. Rewritten on every
+# launch, never stamped: it sits inside the agent's own write grant, so a never-clobber write would
+# let a tampered copy survive to the next launch. `.hgt/.gitignore` keeps it out of `git status`.
+_sandbox_settings() {
+  local wt="$1" gitdir dep p uid
   # A worktree's .git points into <main-repo>/.git/worktrees/<name>; git needs the shared common
-  # dir (objects, refs) to do anything. Resolve it absolute so the bind target is stable. Fail
-  # closed with a legible message rather than letting raw set -e surface git's error mid-argv.
+  # dir to do anything. Fail closed with a legible message rather than letting set -e surface git's
+  # error mid-build.
   gitdir=$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir) \
     || die "sandbox: couldn't resolve the git dir for worktree $wt (not a git worktree?)"
+  uid=$(id -u)
 
-  HGT_SANDBOX_ARGV=(
-    bwrap
-    --die-with-parent          # jail dies if hgt/the pane does — no orphaned confined process
-    --unshare-all --share-net  # own ns for everything EXCEPT net (agent needs Anthropic + remote)
-    --clearenv                 # start empty; re-add only the curated allowlist below
-    --ro-bind /usr /usr
-    --ro-bind-try /bin /bin --ro-bind-try /sbin /sbin
-    --ro-bind-try /lib /lib --ro-bind-try /lib64 /lib64
-    --ro-bind /etc /etc
-    # DNS: on systemd-resolved boxes /etc/resolv.conf symlinks into /run, which the jail doesn't
-    # bind — the link would dangle and glibc falls back to 127.0.0.1:53 (the stub is on
-    # 127.0.0.53), killing name resolution. Bind the resolver dir so the link resolves; -try keeps
-    # plain-/etc/resolv.conf boxes working. NOTE: this only works because --share-net shares
-    # loopback — an --unshare-net egress allowlist (#74) must handle DNS explicitly.
-    --ro-bind-try /run/systemd/resolve /run/systemd/resolve
-    --proc /proc --dev /dev --tmpfs /tmp
-    --tmpfs "$HOME"            # THE boundary: everything under $HOME is gone unless re-bound below
-  )
+  _SANDBOX_SCRATCH="$wt/.hgt/tmp"
+  _SANDBOX_SETTINGS_FILE="$wt/.hgt/srt.json"
+  mkdir -p "$_SANDBOX_SCRATCH/gh"
 
-  # Runtime deps re-bound read-only over the tmpfs (node, the claude launcher, git identity).
+  # Reads default to ALLOWED in SRT, so `denyRead: [$HOME]` is what restores ADR 0005's
+  # deny-by-default. The worktree usually lives under $HOME, so it has to be re-allowed by name:
+  # allowRead beats denyRead, and allowWrite isn't documented to imply read.
+  local -a deny_read=("$HOME") allow_read=("$wt" "$gitdir") allow_write=("$wt" "$gitdir")
+  local -a opt_read=() opt_rw=()
   for dep in $_SANDBOX_RO_DEPS ${HGT_SANDBOX_RO_BIND:-}; do
-    case "$dep" in /*) extra="$dep" ;; *) extra="$HOME/$dep" ;; esac
-    HGT_SANDBOX_ARGV+=(--ro-bind-try "$extra" "$extra")
+    case "$dep" in /*) p="$dep" ;; *) p="$HOME/$dep" ;; esac
+    opt_read+=("$p")
   done
-  # claude's state + Anthropic credential, read-write (unavoidable — ADR 0005 residuals).
-  for dep in $_SANDBOX_RW_DEPS; do
-    HGT_SANDBOX_ARGV+=(--bind-try "$HOME/$dep" "$HOME/$dep")
-  done
+  for dep in $_SANDBOX_RW_DEPS; do opt_rw+=("$HOME/$dep"); done
+  while IFS= read -r p; do allow_read+=("$p"); done < <(_sandbox_extant "${opt_read[@]}")
+  while IFS= read -r p; do allow_read+=("$p"); allow_write+=("$p"); done < <(_sandbox_extant "${opt_rw[@]}")
+  # SRT hands the jail a normal filesystem, so host IPC has to be denied by name — an agent that
+  # reaches the tmux control socket can send-keys into the human's other panes. Unconditional, not
+  # _sandbox_extant-filtered: `tmux new-session` creates /tmp/tmux-<uid> *after* this file is
+  # written, and SRT drops an absent deny at its own launch.
+  deny_read+=("/tmp/tmux-$uid" "/run/user/$uid")
 
-  HGT_SANDBOX_ARGV+=(
-    --bind "$wt" "$wt"          # the worktree: read-write
-    --bind "$gitdir" "$gitdir"  # the repo's shared .git: read-write (commit/log/push)
-    --chdir "$wt"
-  )
+  # The jail can rewrite this file, so deny it explicitly; regenerating each launch isn't enough
+  # on its own. Narrowing the .git write grant itself is #75.
+  local -a deny_write=("$_SANDBOX_SETTINGS_FILE")
 
-  # Env: pass through the curated allowlist (skip unset).
-  local var
+  {
+    printf '{\n'
+    printf '  "network": {\n'
+    printf '    "allowedDomains": %s,\n' "$(_json_arr $_SANDBOX_ALLOWED_DOMAINS)"
+    printf '    "deniedDomains": [],\n'
+    # Without this an unlisted host consults an ask-callback, which in a detached pane either hangs
+    # or auto-allows.
+    printf '    "strictAllowlist": true\n'
+    printf '  },\n'
+    printf '  "filesystem": {\n'
+    printf '    "denyRead": %s,\n'   "$(_json_arr "${deny_read[@]}")"
+    printf '    "allowRead": %s,\n'  "$(_json_arr "${allow_read[@]}")"
+    printf '    "allowWrite": %s,\n' "$(_json_arr "${allow_write[@]}")"
+    printf '    "denyWrite": %s,\n'  "$(_json_arr "${deny_write[@]}")"
+    printf '    "allowGitConfig": false\n'
+    printf '  },\n'
+    # The jail maps to a different uid, so git would refuse both trees as "dubious ownership".
+    printf '  "git": { "safeDirectories": %s }\n' "$(_json_arr "$wt" "$gitdir")"
+    printf '}\n'
+  } >"$_SANDBOX_SETTINGS_FILE"
+}
+
+# sandbox_argv WT — populate the global array HGT_SANDBOX_ARGV with the prefix that jails a process
+# to worktree WT. Caller appends the real command (`claude -n ...`); the prefix ends with `--` so
+# srt can't mistake claude's flags for its own. A global array (not stdout) so both consumers get a
+# real argv: the inline path expands it directly, the tmux path _shq-quotes each element into the
+# send-keys string. WT must be absolute.
+sandbox_argv() {
+  local wt="$1" var i
+  _sandbox_settings "$wt"
+
+  # `env -i` is our --clearenv. An approximation, not an equivalent: the pane's dash re-adds PWD,
+  # and SRT overlays its proxy variables.
+  HGT_SANDBOX_ARGV=(env -i)
   for var in $_SANDBOX_ENV_PASS ${HGT_SANDBOX_SETENV:-}; do
-    [ -n "${!var:-}" ] && HGT_SANDBOX_ARGV+=(--setenv "$var" "${!var}")
+    [ -n "${!var:-}" ] && HGT_SANDBOX_ARGV+=("$var=${!var}")
   done
+  # /tmp isn't writable in the jail (writes are deny-by-default and we grant only the worktree and
+  # git dir), so temp state goes to a private dir. GH_CONFIG_DIR points there too: the old tmpfs
+  # $HOME gave gh a scratch config for free, and without one gh reaches for the real ~/.config/gh —
+  # the admin credential this jail exists to keep away from the agent.
+  HGT_SANDBOX_ARGV+=("TMPDIR=$_SANDBOX_SCRATCH" "GH_CONFIG_DIR=$_SANDBOX_SCRATCH/gh")
 
   # git config injected via the numbered GIT_CONFIG_* env (no ~/.gitconfig write needed). Always
-  # force gpg-signing off — the jail has no ~/.gnupg, so the agent can't sign as Carl and its
-  # commits are unsigned by design. With a scoped push token (#81) also rewrite git@ -> https and
-  # give git a credential helper that reads $GITHUB_TOKEN, so the jailed agent can push with ONLY
-  # that token — never Carl's ~/.ssh or admin gh. The token reaches the jail as an env var delivered
-  # via `bwrap --args 3` (see _sandbox_credential + launch_session): the fd stream carries the
-  # `--setenv GITHUB_TOKEN <tok>` pairs, so the value never hits the argv, the `run` echo, the tmux
-  # pane, or the world-readable /proc cmdline, and it dies with the process (no on-disk secret to
-  # locate or reap). Push deliberately does NOT go through gh: a snap gh can't run in the jail and
-  # would take push down with it (dogfooded on #81); git reads the env directly.
-  local -a gitcfg=(commit.gpgsign false)
+  # force gpg-signing off — the jail has no ~/.gnupg, so the agent can't sign as the human. Always
+  # rewrite git@ -> https: the jail has no net namespace, so ssh can't work at all and an ssh remote
+  # would leave even `git fetch` hanging. With a scoped push token (#81) also give git a credential
+  # helper that reads $GITHUB_TOKEN, so the agent pushes with ONLY that token — never the human's
+  # ~/.ssh or admin gh. Push deliberately does NOT go through gh: a snap gh can't run in the jail
+  # and would take push down with it (dogfooded on #81); git reads the env directly.
+  local -a gitcfg=(
+    commit.gpgsign false
+    "url.https://github.com/.insteadOf" "git@github.com:"
+  )
   if [ -n "${HGT_SANDBOX_GITHUB_TOKEN:-}" ]; then
     _sandbox_credential "$wt"
-    HGT_SANDBOX_ARGV+=(--args 3)  # fd 3 injects `--setenv GITHUB_TOKEN <tok>` etc.; launch opens it
     gitcfg+=(
-      "url.https://github.com/.insteadOf" "git@github.com:"
-      # Empty reset first: clears any credential.helper inherited from the ro-bound ~/.gitconfig, so
-      # only ours is consulted (git tries helpers in list order). Then the env-reading helper: `get`
-      # emits the token, and it exits 0 on git's follow-up `store`/`erase` calls (bare `&&` would
-      # exit non-zero on a non-get op and make git grumble).
+      # Empty reset first: clears any credential.helper inherited from the readable ~/.gitconfig,
+      # so only ours is consulted. Then the env-reading helper: `get` emits the token, and it exits
+      # 0 on git's follow-up store/erase calls (a bare `&&` would make git grumble).
       "credential.helper" ""
       "credential.https://github.com.helper" '!f() { test "$1" = get && printf "username=x-access-token\npassword=%s\n" "$GITHUB_TOKEN"; true; }; f'
     )
   fi
-  HGT_SANDBOX_ARGV+=(--setenv GIT_CONFIG_COUNT "$(( ${#gitcfg[@]} / 2 ))")
-  local i=0
+  HGT_SANDBOX_ARGV+=("GIT_CONFIG_COUNT=$(( ${#gitcfg[@]} / 2 ))")
+  i=0
   while [ "$i" -lt "${#gitcfg[@]}" ]; do
-    HGT_SANDBOX_ARGV+=(
-      --setenv "GIT_CONFIG_KEY_$((i / 2))" "${gitcfg[i]}"
-      --setenv "GIT_CONFIG_VALUE_$((i / 2))" "${gitcfg[i + 1]}"
-    )
+    HGT_SANDBOX_ARGV+=("GIT_CONFIG_KEY_$((i / 2))=${gitcfg[i]}" "GIT_CONFIG_VALUE_$((i / 2))=${gitcfg[i + 1]}")
     i=$((i + 2))
   done
+
+  # #81: the PAT rides fd 3, never the argv. This sources the fd (launch_session opens it on the
+  # command group and unlinks the file) and execs the rest, so GITHUB_TOKEN lands in srt's
+  # environment — and the jail's — without appearing in /proc/<pid>/cmdline.
+  if [ -n "${_SANDBOX_ARGS_FILE:-}" ]; then
+    HGT_SANDBOX_ARGV+=(sh -c '. /dev/fd/3; exec "$@"' hgt)
+  fi
+
+  HGT_SANDBOX_ARGV+=(srt --settings "$_SANDBOX_SETTINGS_FILE" --)
 }
 
 # _sandbox_check_token_scope — probe HGT_SANDBOX_GITHUB_TOKEN's classic OAuth scopes before the
@@ -204,17 +304,12 @@ _sandbox_check_token_scope() {
 
 # _sandbox_credential WT — stage the scoped PAT (HGT_SANDBOX_GITHUB_TOKEN) for delivery INTO the
 # jail as an env var (#81), the same seam attended + unattended (#17). The value must never ride
-# bwrap's argv: send-keys would type it into the visible tmux pane, `run` would echo it, and
-# /proc/<pid>/cmdline is world-readable. So we hand it to bwrap via `--args <fd>` — the fd stream
-# sets GITHUB_TOKEN (+ GH_TOKEN for gh) inside the jail, landing only in the child's environ
-# (owner-only) and dying with the process. No persistent on-disk secret: the fd is sourced from a
-# mktemp'd file (O_EXCL + random name + mode 600 → safe even on a shared base, #1) that
-# launch_session opens then immediately unlinks (#2). git's helper reads $GITHUB_TOKEN; gh reads
-# $GH_TOKEN natively. Sets _SANDBOX_ARGS_FILE (the payload path) and appends the gh binary bind
-# (best-effort) to HGT_SANDBOX_ARGV. Writes a file — a launch-time side effect.
-#
-# NOTE (trust): a usable token in the jail + today's --share-net egress is the exfil surface ADR
-# 0005 flags as gated on #74. Safe to use only while egress is trusted/constrained.
+# the argv: send-keys would type it into the visible tmux pane, `run` would echo it, and
+# /proc/<pid>/cmdline is world-readable. So it goes on fd 3 as a shell fragment the `sh -c` wrapper
+# in sandbox_argv sources — landing only in the child's environ and dying with the process. The fd
+# is sourced from a mktemp'd file (O_EXCL + random name + mode 600) that launch_session opens then
+# immediately unlinks. git's helper reads $GITHUB_TOKEN; gh reads $GH_TOKEN natively.
+# Sets _SANDBOX_ARGS_FILE. Writes a file — a launch-time side effect.
 _sandbox_credential() {
   local wt="$1" gh
   _sandbox_check_token_scope   # #98: warn/fail-closed BEFORE staging the payload or touching the jail
@@ -222,23 +317,20 @@ _sandbox_credential() {
   # else $TMPDIR / /tmp. HGT_SANDBOX_CRED_DIR overrides (the suite points it inside its tmpdir).
   local base="${HGT_SANDBOX_CRED_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}}"
   ( umask 077; mkdir -p "$base" )
-  # Reaper: launch unlinks the payload, but if a launch dies before its pane gets there (tmux/
-  # send-keys fails, pane exits early, user Ctrl-Cs) the file is stranded with no cleaner — an EXIT
-  # trap in hgt would race the pane. Sweep payloads older than 5 min at the next launch instead.
+  # Reaper: launch unlinks the payload, but if a launch dies before its pane gets there the file is
+  # stranded with no cleaner — an EXIT trap in hgt would race the pane. Sweep old ones instead.
   find "$base" -maxdepth 1 -name 'hgt-args.*' -mmin +5 -delete 2>/dev/null || true
-  # mktemp: O_EXCL + unpredictable name + mode 600 — no symlink / pre-create attack even on a shared
-  # base (#1). Holds the token on disk only from here until launch opens+unlinks it: microseconds on
-  # the inline path, tmux+shell-startup on the tmux path — brief, owner-only, tmpfs under XDG (#2).
   _SANDBOX_ARGS_FILE=$(umask 077; mktemp "$base/hgt-args.XXXXXX") \
     || die "sandbox: couldn't stage the credential payload under $base"
-  # NUL-separated bwrap args, injected where `--args 3` sits: set the scoped token as jail env.
-  printf '%s\0' --setenv GITHUB_TOKEN "$HGT_SANDBOX_GITHUB_TOKEN" \
-                --setenv GH_TOKEN "$HGT_SANDBOX_GITHUB_TOKEN" >"$_SANDBOX_ARGS_FILE"
-  # gh is only for `gh pr create` (reads GH_TOKEN from env) — push never needs it. Bind best-effort;
-  # skip a snap gh, dead in the jail (no snapd/mounts). Its absence never blocks push.
-  gh=$(command -v gh) || { warn "sandbox: gh not on PATH — jailed \`gh pr create\` unavailable (push still works)"; return 0; }
+  # Single-quoted with the standard '\'' escape, so a token containing a quote can't break out
+  # into the sourcing shell.
+  local tok=${HGT_SANDBOX_GITHUB_TOKEN//\'/\'\\\'\'}
+  printf "export GITHUB_TOKEN='%s' GH_TOKEN='%s'\n" "$tok" "$tok" >"$_SANDBOX_ARGS_FILE"
+  # gh is only for `gh pr create` (reads GH_TOKEN from env) — push never needs it. Nothing to bind
+  # any more: SRT leaves the system filesystem readable. A snap gh still can't run in the jail.
+  gh=$(type -P gh) || { warn "sandbox: gh not on PATH — jailed \`gh pr create\` unavailable (push still works)"; return 0; }
   case "$gh" in
-    /snap/*) warn "sandbox: gh is a snap ($gh) — can't run in the jail, so \`gh pr create\` won't work there (push still works); install a non-snap gh for in-jail PRs"; return 0 ;;
+    /snap/*) warn "sandbox: gh is a snap ($gh) — can't run in the jail, so \`gh pr create\` won't work there (push still works); install a non-snap gh for in-jail PRs" ;;
   esac
-  HGT_SANDBOX_ARGV+=(--ro-bind "$gh" "$gh")
+  return 0
 }

@@ -161,11 +161,12 @@ _shq() {
   printf "'%s'" "$s"
 }
 
-# _prepare_sandbox WT — build the confinement prefix for a claude launch in worktree WT (#67).
-# Enabled (default): preflight bwrap and fail closed, then set HGT_SANDBOX_ARGV (a real argv, for
-# the inline path) and _SANDBOX_SQ (the same _shq-quoted with a trailing space, for the send-keys
-# string). Disabled (--no-sandbox / HGT_NO_SANDBOX=1): warn loudly and leave both empty, so the
-# unconfined launch matches the pre-#67 behavior byte-for-byte.
+# _prepare_sandbox WT — build the confinement prefix for a claude launch in worktree WT (#67, #74).
+# Enabled (default): preflight the jail's dependencies and fail closed, generate the srt settings
+# file, then set HGT_SANDBOX_ARGV (a real argv, for the inline path) and _SANDBOX_SQ (the same
+# _shq-quoted with a trailing space, for the send-keys string). Disabled (--no-sandbox /
+# HGT_NO_SANDBOX=1): warn loudly and leave both empty, so the unconfined launch matches the
+# pre-#67 behavior byte-for-byte.
 _prepare_sandbox() {
   local wt="$1" a
   HGT_SANDBOX_ARGV=()
@@ -194,9 +195,10 @@ launch_session() {
   # so a self-set env var crosses no trust boundary.
   local prompt="${HGT_WORK_PROMPT:-Read .hgt/work/${n}.md and CLAUDE.md, then start on issue #${n}. Commit early and often — every commit is a recovery checkpoint. Open a PR for review; do not merge.}"
 
-  # Sandbox seam (#67, ADR 0005): confine claude to the worktree. _prepare_sandbox preflights
-  # (fail closed) and populates HGT_SANDBOX_ARGV (the bwrap prefix) + _SANDBOX_SQ (the same,
-  # _shq-quoted, for the send-keys string the pane shell re-parses). Both are empty when
+  # Sandbox seam (#67/#74, ADR 0007): confine claude to the worktree and to an egress allowlist.
+  # _prepare_sandbox preflights (fail closed) and populates HGT_SANDBOX_ARGV (the `env -i … srt`
+  # prefix) + _SANDBOX_SQ (the same, _shq-quoted, for the send-keys string the pane shell
+  # re-parses). Both are empty when
   # --no-sandbox / HGT_NO_SANDBOX=1 opts out, so the unconfined launch is byte-identical to before.
   # Called only on the paths that actually spawn claude — a resume reattaches an already-jailed
   # session, so it neither preflights nor rebuilds the prefix.
@@ -208,10 +210,11 @@ launch_session() {
     (
       cd "$wt"
       if [ -n "${_SANDBOX_ARGS_FILE:-}" ]; then
-        # #81: fd 3 carries the token payload for `bwrap --args 3`. Scope the redirect to the command
-        # GROUP (not `exec` into the shell) so fd 3 closes when claude exits — never left open in this
-        # shell where `cat /proc/self/fd/3` would reprint the PAT. rm inside: the group's redirect has
-        # already opened the fd, so unlinking now leaves bwrap reading an anonymous inode.
+        # #81: fd 3 carries the token payload the sandbox prefix's `sh -c '. /dev/fd/3'` sources.
+        # Scope the redirect to the command GROUP (not `exec` into the shell) so fd 3 closes when
+        # claude exits — never left open in this shell where `cat /proc/self/fd/3` would reprint the
+        # PAT. rm inside: the group's redirect has already opened the fd, so unlinking now leaves the
+        # wrapper reading an anonymous inode.
         { rm -f "$_SANDBOX_ARGS_FILE"; run "${HGT_SANDBOX_ARGV[@]}" claude -n "$name" "$prompt"; } 3<"$_SANDBOX_ARGS_FILE"
       else
         run "${HGT_SANDBOX_ARGV[@]}" claude -n "$name" "$prompt"
@@ -251,8 +254,8 @@ launch_session() {
     run tmux new-session -d -s "$name" -c "$wt"
     local launch="${_SANDBOX_SQ}claude -n $(_shq "$name") $(_shq "$prompt")"
     # #81: with a scoped token, wrap the launch in a command GROUP that opens the payload on fd 3 for
-    # `bwrap --args 3` and unlinks it — the `3< <file>` on the group closes the fd when claude exits,
-    # so it's never left readable in the pane shell (unlike `exec 3<`). dash-safe (no process sub).
+    # the prefix's `sh -c '. /dev/fd/3'` and unlinks it — the `3< <file>` on the group closes the fd
+    # when claude exits, so it's never left readable in the pane shell (unlike `exec 3<`). dash-safe.
     if [ -n "${_SANDBOX_ARGS_FILE:-}" ]; then
       launch="{ rm -f $(_shq "$_SANDBOX_ARGS_FILE"); ${launch}; } 3< $(_shq "$_SANDBOX_ARGS_FILE")"
     fi

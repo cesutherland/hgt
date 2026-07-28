@@ -26,9 +26,9 @@ if [ "${1:-}" = worktree ] && [ "${2:-}" = add ]; then
 fi
 
 # `-C <wt> rev-parse ... --git-common-dir` — the sandbox seam (#67) asks git for the repo's
-# shared .git so it can bind-mount it into the jail. Echo `<wt>/.git` off the `-C` value (a real
-# worktree's common dir lives under the main repo, but the exact path isn't hgt's contract — that
-# it binds *the resolved common dir* is; a fixed, -C-derived answer keeps the suite hermetic).
+# shared .git so it can grant the jail write access to it. Echo `<wt>/.git` off the `-C` value (a
+# real worktree's common dir lives under the main repo, but the exact path isn't hgt's contract —
+# that it grants *the resolved common dir* is; a fixed, -C-derived answer keeps the suite hermetic).
 if [ "${1:-}" = -C ] && [ "${3:-}" = rev-parse ]; then
   for a in "$@"; do case "$a" in --git-common-dir) printf '%s/.git\n' "$2"; exit 0 ;; esac; done
 fi
