@@ -87,8 +87,8 @@ gh api -X POST repos/{owner}/{repo}/rulesets --input - <<'JSON'
 JSON
 
 # 2) Disable "Allow GitHub Actions to create and approve pull requests" and default the
-#    workflow token to read-only. The executor workflow requests the narrow writes it
-#    needs (contents: write, pull-requests: write) explicitly — nothing more.
+#    workflow token to read-only. The executor workflow needs no write from that token at
+#    all — every write goes through the machine-user PAT in step 3.
 gh api -X PUT repos/{owner}/{repo}/actions/permissions/workflow \
   -F default_workflow_permissions=read \
   -F can_approve_pull_request_reviews=false

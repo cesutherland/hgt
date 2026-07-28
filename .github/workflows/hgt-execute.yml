@@ -1,7 +1,8 @@
 # hgt-execute — the Phase 2 executor: a `ready` issue becomes a PR with zero local
 # babysitting (spec §2 "Actions path", issue #51). This is NOT ci.yml — ci.yml is the
-# poor-and-powerless test gate. This job holds power (contents + pull-requests write and a
-# Claude auth secret), so §3's guardrails are load-bearing here, not decorative:
+# poor-and-powerless test gate. This job holds power (a machine-user PAT and a Claude auth
+# secret; the ambient workflow token is read-only), so §3's guardrails are load-bearing here,
+# not decorative:
 #
 #   - Only `ready`-labeled issues are ever picked up (the trust boundary). The label is a
 #     human act; the ruleset keeps that human as the merge gate.

@@ -31,7 +31,12 @@ guard's GraphQL query. A preflight step fails the run by name when the secret is
 **Scope is `public_repo` and nothing else; classic, not fine-grained.** Fine-grained PATs can
 only target repos the token's account *owns*; the machine user is a collaborator and owns
 nothing, so `cesutherland/hgt` is not selectable. `public_repo` suffices for a public repo and
-cannot reach private ones — containment by construction, not by policy.
+cannot reach private ones.
+
+Note what that does *not* buy: a classic PAT is account-wide, not repo-scoped. `public_repo`
+grants write on **every** public repo `hgtbot` can push to, so the real containment is that
+`hgtbot` is a collaborator on this repo and nothing else — policy, enforced by nobody. Adding
+the account to another repo widens this token retroactively. Don't.
 
 ### Why `workflow` scope is excluded
 
@@ -83,11 +88,13 @@ runner holding nothing worth stealing.
 
 ## Consequences / residuals
 
-- **A resident credential in the injection surface.** Unlike `GITHUB_TOKEN`, the PAT outlives
-  the job, and checkout writes it into the workspace `.git/config` where the agent can read it.
-  Secrecy is not the containment — scope is: push branches, open PRs, no merge, no approve, no
-  private repos, and branch protection still owns `main`. Injection that succeeds buys the
-  attacker a PR that a human must still approve.
+- **A resident credential in the injection surface — tracked as its own slice.** Unlike
+  `GITHUB_TOKEN`, the PAT outlives the job, and checkout writes it into the workspace
+  `.git/config` where the agent can read it and echo it into the world-readable transcript
+  artifact (#64). Scope is what bounds it today: push branches, open PRs, no merge, no approve,
+  no private repos, branch protection still owns `main` — injection that succeeds buys the
+  attacker a PR a human must still approve. The real fix is to stop handing the agent the
+  credential at all (a post-agent ship step), which is a design change, not a wiring fix.
 - **The executor still cannot push workflow changes**, unchanged from pre-#79 (see above for
   why). The prompt tells it to STOP loudly and the fail-loud guard names that cause when a run
   touching `.github/workflows/**` produces no PR. Those tasks are human/local work.
@@ -106,7 +113,9 @@ runner holding nothing worth stealing.
 1. `gh secret set HGT_MACHINE_USER_TOKEN --app actions` — paste a classic PAT minted on the
    machine user with **`public_repo` and nothing else**. Not `workflow`, not `repo`.
 2. Confirm the machine user has write access:
-   `gh api -X PUT repos/cesutherland/hgt/collaborators/hgtbot -f permission=push`.
+   `gh api -X PUT repos/cesutherland/hgt/collaborators/hgtbot -f permission=push`. Keep it a
+   collaborator on **this repo only** — the PAT's scope is account-wide, so every repo `hgtbot`
+   joins is a repo this token can write.
 3. Flip the toggle back off — **after** step 1, or the next `ready` issue has no way to open a
    PR: `gh api -X PUT repos/cesutherland/hgt/actions/permissions/workflow -F
    default_workflow_permissions=read -F can_approve_pull_request_reviews=false`.
