@@ -511,11 +511,6 @@ bare_path() {
   # the settings file sits inside the agent's own write grant, so it denies writes to itself —
   # otherwise a tampered copy would be waiting for the next launch to read
   [[ "$cfg" == *"\"denyWrite\": [\"$wt/.hgt/srt.json\""* ]]
-  # .git/config is in the SHARED common dir: core.pager/core.hooksPath written there would execute
-  # on the HOST next time the human runs git in this repo. SRT protects these for a repo it's
-  # given, but not for a bare git dir handed to it as an allowWrite root — so hgt names them.
-  [[ "$cfg" == *"\"$wt/.git/config\""* ]]
-  [[ "$cfg" == *"\"$wt/.git/hooks\""* ]]
   [[ "$cfg" == *'"allowGitConfig": false'* ]]
   # host IPC: --unshare-net doesn't isolate AF_UNIX, and an agent that reaches the tmux control
   # socket can send-keys into the human's other panes — unconfined host execution

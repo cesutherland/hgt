@@ -158,10 +158,8 @@ hgt work <n>             # local execution: worktree + Claude session for issue 
     unlinked file descriptor, so its value never touches the argv, the command echo, the tmux
     pane, or `/proc/<pid>/cmdline`, and it dies with the process (no persistent on-disk secret).
     **Precondition:** a token usable in the jail wants egress locked down (issue #74).
-  - **Known friction:** `.git/config` is not writable (it lives in the *shared* git dir, where
-    a `core.pager` written by the agent would execute on the **host**), so use
-    `git push origin HEAD`, not `git push -u`. `/tmp` is not writable either — `TMPDIR` points
-    at a private dir inside the worktree, so a tool that hardcodes `/tmp` will fail.
+  - **Known friction:** `/tmp` is not writable in the jail — `TMPDIR` points at a private dir
+    inside the worktree, so a tool that hardcodes `/tmp` will fail.
 
 ## Tests & CI
 

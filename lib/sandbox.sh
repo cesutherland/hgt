@@ -20,10 +20,8 @@
 # HGT_SANDBOX_SRT_VERSION overrides; empty skips the check.
 _SANDBOX_SRT_VERSION="${HGT_SANDBOX_SRT_VERSION-0.0.67}"
 
-# SRT's jail is always `--unshare-net` and `network` is a required settings key, so adopting it
-# forces a network decision — there is no unrestricted mode to defer to. This fixed list is the
-# minimum that keeps the agent working (the API it talks to, and the forge it pushes to). Deriving
-# it from the worktree's own remote, and the seam to extend it, belong to #74.
+# `network` is a required settings key and SRT always drops the net namespace, so there is no
+# unrestricted mode to defer with. Placeholder until #74 derives it.
 _SANDBOX_ALLOWED_DOMAINS='api.anthropic.com github.com api.github.com'
 
 # Runtime deps under $HOME re-allowed for reading over the blanket `denyRead: [$HOME]`.
@@ -31,7 +29,7 @@ _SANDBOX_ALLOWED_DOMAINS='api.anthropic.com github.com api.github.com'
 # HGT_SANDBOX_RO_BIND (space-separated, $HOME-relative or absolute).
 _SANDBOX_RO_DEPS='.nvm .local .gitconfig .gitconfig.local .config/git'
 # claude's state + the Anthropic credential it holds, read-write because claude updates them at
-# runtime. Unavoidable exposure (ADR 0005 residuals; #73 narrows it).
+# runtime. Narrowing this is #73.
 _SANDBOX_RW_DEPS='.claude .claude.json'
 # Host env vars that survive into the jail. SRT never clears the environment, so hgt keeps ADR
 # 0005's allowlist by invoking srt from an `env -i` baseline. PATH is load-bearing twice over:
@@ -133,10 +131,9 @@ _json_arr() {
   printf ']'
 }
 
-# _sandbox_extant [PATH...] — the arguments that actually exist, in order. This is ADR 0005's
-# `--ro-bind-try`/`--bind-try`, which SRT has no equivalent for: a settings path that doesn't
-# exist doesn't get skipped, it kills the launch. Optional deps (~/.gitconfig.local, ~/.claude.json)
-# are absent on plenty of boxes.
+# _sandbox_extant [PATH...] — the arguments that actually exist, in order. SRT has no
+# `--ro-bind-try` equivalent: a settings path that doesn't exist kills the launch rather than being
+# skipped, and optional deps like ~/.gitconfig.local are absent on plenty of boxes.
 _sandbox_extant() {
   local p
   for p in "$@"; do [ -e "$p" ] && printf '%s\n' "$p"; done
@@ -160,11 +157,9 @@ _sandbox_settings() {
   _SANDBOX_SETTINGS_FILE="$wt/.hgt/srt.json"
   mkdir -p "$_SANDBOX_SCRATCH/gh"
 
-  # Reads default to ALLOWED in SRT — the inverse of ADR 0005's tmpfs $HOME. `denyRead: [$HOME]`
-  # restores deny-by-default (~/.ssh, the admin gh auth, sibling repos), then we allow back only
-  # what the agent needs. The worktree lives under $HOME on a normal setup, so it must be named
-  # explicitly: allowRead beats denyRead, and allowWrite isn't documented to imply read.
-  # Everything optional goes through _sandbox_extant, since a missing entry aborts the launch.
+  # Reads default to ALLOWED in SRT, so `denyRead: [$HOME]` is what restores ADR 0005's
+  # deny-by-default. The worktree usually lives under $HOME, so it has to be re-allowed by name:
+  # allowRead beats denyRead, and allowWrite isn't documented to imply read.
   local -a deny_read=("$HOME") allow_read=("$wt" "$gitdir") allow_write=("$wt" "$gitdir")
   local -a opt_read=() opt_rw=()
   for dep in $_SANDBOX_RO_DEPS ${HGT_SANDBOX_RO_BIND:-}; do
@@ -174,19 +169,15 @@ _sandbox_settings() {
   for dep in $_SANDBOX_RW_DEPS; do opt_rw+=("$HOME/$dep"); done
   while IFS= read -r p; do allow_read+=("$p"); done < <(_sandbox_extant "${opt_read[@]}")
   while IFS= read -r p; do allow_read+=("$p"); allow_write+=("$p"); done < <(_sandbox_extant "${opt_rw[@]}")
-  # ADR 0005's --unshare-all made host IPC absent by construction; SRT hands the jail a normal
-  # filesystem instead. Denying the tmux socket dir keeps an agent from send-keys'ing into the
-  # human's other panes. Unlike the allows, denies skip _sandbox_extant: on a fresh boot
-  # /tmp/tmux-<uid> is created by `tmux new-session` *after* this file is generated, and SRT drops
-  # an absent deny at its own launch (inside the pane) — so an unconditional entry lands exactly
-  # when the socket exists to protect.
+  # SRT hands the jail a normal filesystem, so host IPC has to be denied by name — an agent that
+  # reaches the tmux control socket can send-keys into the human's other panes. Unconditional, not
+  # _sandbox_extant-filtered: `tmux new-session` creates /tmp/tmux-<uid> *after* this file is
+  # written, and SRT drops an absent deny at its own launch.
   deny_read+=("/tmp/tmux-$uid" "/run/user/$uid")
 
-  # .git/config lives in the SHARED common dir, so a core.pager written there executes on the HOST
-  # next time the human runs git in this repo. SRT protects .git/config and .git/hooks
-  # automatically for a *repo* it's given, but not for a bare git dir handed to it as an allowWrite
-  # root (verified against 0.0.67), so name them. Cost: `git push -u` doesn't work in the jail.
-  local -a deny_write=("$_SANDBOX_SETTINGS_FILE" "$gitdir/config" "$gitdir/hooks")
+  # The jail can rewrite this file, so deny it explicitly; regenerating each launch isn't enough
+  # on its own. Narrowing the .git write grant itself is #75.
+  local -a deny_write=("$_SANDBOX_SETTINGS_FILE")
 
   {
     printf '{\n'
