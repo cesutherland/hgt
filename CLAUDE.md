@@ -16,6 +16,6 @@ Applies to everything you generate — chat, commits, PRs, issues. Fewer words w
 - **Commit body:** why, not what; ≤3 lines. Omit it when the subject says enough.
 - **PR body:** what changed + why, ≤5 lines unless asked. No `## Summary`, no restating the diff, no checklist theater. Link the issue.
 - **Issue body:** the problem + the shape of done. Durable guidance only — the §2 snapshot excludes comments, so nothing load-bearing lives in a comment. Tight.
-- **Code comments:** match the density of the surrounding code. Explain *why*, not *what*; no narrating the obvious, no commented-out code. `file_path:line` beats prose.
+- **Code comments:** match the density of the surrounding code. Explain *why*, not *what*; no narrating the obvious, no commented-out code. `file_path:line` beats prose. Full guide: [docs/style.md](docs/style.md).
 - **Templates:** fill the `.github/ISSUE_TEMPLATE/` skeleton, don't hand-roll.
 - **Self-check before send:** could this be half as long without losing signal? If yes, cut.
