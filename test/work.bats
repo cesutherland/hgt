@@ -501,10 +501,6 @@ bare_path() {
 
 @test "sandbox: the jail can't read ~/.ssh or the admin gh auth, and can't rewrite its own policy" {
   work_env
-  # The tmux socket dir can't be fixtured — it's derived from the real uid — and SRT drops a deny
-  # for a path that isn't there, so create the same dir tmux itself would. Left behind on purpose:
-  # removing it could yank the socket out from under a real tmux session on the developer's box.
-  mkdir -p "/tmp/tmux-$(id -u)"
   run "$HGT_BIN" work 5 --no-tmux
   [ "$status" -eq 0 ]
   local wt="$TMP/wt/5-add-widget" cfg; cfg=$(srt_cfg)
@@ -524,6 +520,7 @@ bare_path() {
   # host IPC: --unshare-net doesn't isolate AF_UNIX, and an agent that reaches the tmux control
   # socket can send-keys into the human's other panes — unconfined host execution
   [[ "$cfg" == *"\"/tmp/tmux-$(id -u)\""* ]]
+  [[ "$cfg" == *"\"/run/user/$(id -u)\""* ]]
 }
 
 @test "sandbox: a host-exported secret does not reach the jail; HGT_SANDBOX_SETENV opts one in" {

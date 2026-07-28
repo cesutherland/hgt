@@ -159,7 +159,6 @@ _sandbox_settings() {
   _SANDBOX_SCRATCH="$wt/.hgt/tmp"
   _SANDBOX_SETTINGS_FILE="$wt/.hgt/srt.json"
   mkdir -p "$_SANDBOX_SCRATCH/gh"
-  : >"$_SANDBOX_SETTINGS_FILE"   # exists before the deny list below is filtered
 
   # Reads default to ALLOWED in SRT — the inverse of ADR 0005's tmpfs $HOME. `denyRead: [$HOME]`
   # restores deny-by-default (~/.ssh, the admin gh auth, sibling repos), then we allow back only
@@ -177,16 +176,17 @@ _sandbox_settings() {
   while IFS= read -r p; do allow_read+=("$p"); allow_write+=("$p"); done < <(_sandbox_extant "${opt_rw[@]}")
   # ADR 0005's --unshare-all made host IPC absent by construction; SRT hands the jail a normal
   # filesystem instead. Denying the tmux socket dir keeps an agent from send-keys'ing into the
-  # human's other panes.
-  while IFS= read -r p; do deny_read+=("$p"); done < <(_sandbox_extant "/tmp/tmux-$uid" "/run/user/$uid")
+  # human's other panes. Unlike the allows, denies skip _sandbox_extant: on a fresh boot
+  # /tmp/tmux-<uid> is created by `tmux new-session` *after* this file is generated, and SRT drops
+  # an absent deny at its own launch (inside the pane) — so an unconditional entry lands exactly
+  # when the socket exists to protect.
+  deny_read+=("/tmp/tmux-$uid" "/run/user/$uid")
 
   # .git/config lives in the SHARED common dir, so a core.pager written there executes on the HOST
   # next time the human runs git in this repo. SRT protects .git/config and .git/hooks
   # automatically for a *repo* it's given, but not for a bare git dir handed to it as an allowWrite
   # root (verified against 0.0.67), so name them. Cost: `git push -u` doesn't work in the jail.
-  local -a deny_write=()
-  while IFS= read -r p; do deny_write+=("$p"); done < <(
-    _sandbox_extant "$_SANDBOX_SETTINGS_FILE" "$gitdir/config" "$gitdir/hooks")
+  local -a deny_write=("$_SANDBOX_SETTINGS_FILE" "$gitdir/config" "$gitdir/hooks")
 
   {
     printf '{\n'
