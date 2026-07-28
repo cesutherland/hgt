@@ -19,10 +19,10 @@ EXEC_WF="$HGT_REPO/.github/workflows/hgt-execute.yml"
 }
 
 @test "hgt-execute: the ambient workflow token stays read-only (#79)" {
-  # Every write goes through the PAT, so the workflow token has nothing left to grant. A
-  # `write` reappearing here means someone re-plumbed a write through the wrong identity.
-  run sed -n '/^permissions:/,/^$/p' "$EXEC_WF"
+  # Exact-match, not a substring check: every write goes through the PAT, so the block must
+  # equal precisely this. A write grant, an extra key, or a reorder flips it red; "doesn't
+  # contain the word write" would miss all three and only catch the literal string.
+  run grep -A 3 '^permissions:' "$EXEC_WF"
   [ "$status" -eq 0 ]
-  [ -n "$output" ]
-  [[ "$output" != *write* ]]
+  [ "$output" = $'permissions:\n  contents: read\n  issues: read\n  pull-requests: read' ]
 }
