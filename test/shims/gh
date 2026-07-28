@@ -7,13 +7,24 @@
 # $SHIM_LOG; we don't re-test gh.
 #
 # Records "gh <args...>" to $SHIM_LOG and honors:
-#   api user   -> SHIM_GH_USER   (default: testuser), exits SHIM_GH_USER_EXIT (default: 0) so a
-#                                 login-lookup failure can be simulated without failing the
-#                                 unrelated `gh issue view` (which shares SHIM_GH_EXIT)
-#   everything -> SHIM_GH_OUT
-#   exit code  -> SHIM_GH_EXIT   (default: 0)
+#   api user     -> SHIM_GH_USER   (default: testuser), exits SHIM_GH_USER_EXIT (default: 0) so a
+#                                   login-lookup failure can be simulated without failing the
+#                                   unrelated `gh issue view` (which shares SHIM_GH_EXIT)
+#   api -i user  -> the token-scope probe (#98): emits an X-OAuth-Scopes header from
+#                    SHIM_GH_SCOPES (unset/empty -> header omitted, modeling a fine-grained PAT),
+#                    exits SHIM_GH_SCOPES_EXIT (default: 0) so a probe failure (bad token/network)
+#                    can be simulated independent of the other two canned calls
+#   everything   -> SHIM_GH_OUT
+#   exit code    -> SHIM_GH_EXIT   (default: 0)
 set -euo pipefail
 printf 'gh %s\n' "$*" >>"${SHIM_LOG:?SHIM_LOG not set}"
+
+if [ "${1:-}" = api ] && [ "${2:-}" = -i ] && [ "${3:-}" = user ]; then
+  printf 'HTTP/2.0 200 OK\n'
+  [ -n "${SHIM_GH_SCOPES:-}" ] && printf 'X-OAuth-Scopes: %s\n' "$SHIM_GH_SCOPES"
+  printf '\n{"login":"machine-user"}\n'
+  exit "${SHIM_GH_SCOPES_EXIT:-0}"
+fi
 
 if [ "${1:-}" = api ] && [ "${2:-}" = user ]; then
   printf '%s\n' "${SHIM_GH_USER:-testuser}"
