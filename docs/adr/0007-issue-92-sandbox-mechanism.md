@@ -118,6 +118,9 @@ them when the pin moves.
   handed to it as an `allowWrite` root, which is exactly what a worktree setup does. Those denies
   have to be named explicitly, or a jailed agent can write a `core.pager` that executes on the
   **host**. The cost of keeping `allowGitConfig: false` is that `git push -u` fails in the jail.
+  (#75's future ro-scoping would block the same write at the mount layer, making this deny
+  redundant — but it doesn't remove the `git push -u` cost, only relocates which layer pays it,
+  so this stays documented here rather than folded into #75.)
 
 The `env -i` mitigation below was confirmed the hard way: a `GH_TOKEN` exported in the calling
 shell does reach the jail without it, and SRT ships no default `unsetEnvVars`.
