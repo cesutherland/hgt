@@ -21,6 +21,14 @@ for wt in "${worktrees[@]}"; do
 for ((i = ${#worktrees[@]} - 1; i >= 0; i--)); do
 ```
 
+## Comments describe the code, not the change
+
+A comment addressed to the reviewer — "now also handles the empty case",
+"fixed per review", "this ensures the retry works" — is meaningless the
+moment the PR merges. Write for the next reader of the file, who sees only
+the code as it stands. Corollary: when you edit code, the comment above it
+is part of the edit — update it or delete it, don't orphan it.
+
 ## Kill ritual suffixes
 
 `# Prints to stdout.` tacked onto every function comment is noise once it's
@@ -45,7 +53,7 @@ pointer, not a re-argued case:
 # root-ish privileges, which we don't want to require on dev machines...
 
 # good — one line, points at the source of truth
-# Sandbox mechanism: see ADR 0005.
+# Sandbox mechanism: see ADR 0007.
 ```
 
 ## Non-goals
