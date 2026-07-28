@@ -13,21 +13,42 @@ The name carries some lore:
 
 ## What it is
 
-You are the **Mayor** (what's worth doing, and in what order), the **Witness** (is it
-correct), and the **Deacon** (is it safe to land). Agents are Polecats. The harness keeps
-a human in exactly those three seats and nowhere else.
+You hold three seats, and nothing else:
 
-This is **not** an autonomous swarm. The human holds three seats — scope, review, merge —
-and the machine drives everything between. That buys two specific things, both borrowed
-from Steve Yegge's Gastown:
+- **Mayor** — what's worth doing, in what order; sling it.
+- **Witness** — keep it moving: watch the runs, unstick the stuck, answer `needs-human`.
+- **Judge** — is it right, does it land: review the PR, approve the merge.
 
-- **Self-propelling work:** once an issue is scoped and labeled, it moves itself to a
-  reviewable PR without you driving each step — you queue work, you don't babysit it.
+Two of those names are stolen from Steve Yegge's
+[Gas Town](https://steve-yegge.medium.com/welcome-to-gas-town-4f25ee16dd04), and the
+theft is an inversion, on purpose. In Gas Town the Mayor (the concierge that dispatches
+work) and the Witness (the babysitter that unsticks workers) are *agents*; the human —
+the Overseer — feeds the machine ideas. hgt hands those seats to the human: our Mayor is
+Overseer + Mayor collapsed into one (you decide *and* you sling — `hgt issue ready <n>`
+is the dispatch), and the Witness's unsticking rounds are yours.
+
+**Judge** is not a Gas Town name because Gas Town has no such seat. Its Refinery merges
+autonomously — conflict serialization, not judgment; quality is amortized into up-front
+specs and redundancy, and some work is simply lost. That gap is hgt's thesis: gt is
+one-sided — sling work (GUPP: "if there is work on your hook, you must run it"). hgt is
+two-sided — sling work, then take responsibility for the result. Specs won't be perfect
+in advance, and things drift between spec and landing, so judgment stays a live human
+act at the back end.
+
+(Gas Town's Deacon — a daemon patrolling the agents to keep them on task — gets no human
+seat here. The name is reserved, pointed backwards: a future patrol that nudges *you* —
+PRs waiting on review, stale `needs-human`, an idle queue. The human is the propellant,
+and the propellant needs keeping on task too.)
+
+The harness is **not** an autonomous swarm. It borrows two Gas Town ideas:
+
+- **Self-propelling work** (our phrase; Yegge's concept is GUPP): once an issue is
+  scoped and labeled, it moves itself to a reviewable PR without you driving each step.
 - **Persistent work state:** the durable state lives in git (issue + committed plan file),
   not in an agent's memory, so a crash or `--resume` doesn't lose the thread.
 
-We keep those two ideas and drop the rest of Gastown's chaos: the 20–30-agent burn, the
-auto-merge, and the rampaging supervisor.
+— and drops the rest of the chaos: the 20–30-agent burn, the auto-merge, and the
+rampaging supervisor.
 
 ## How it works
 

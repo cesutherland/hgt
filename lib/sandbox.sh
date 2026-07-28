@@ -13,6 +13,8 @@
 # HGT_SANDBOX_GITHUB_TOKEN to a scoped machine-user PAT and it gains a credentialed push/PR path.
 # `bwrap --args <fd>` went away with the hand-rolled argv, so the token now reaches the jail by
 # sourcing an unlinked fd — its value still never touches the argv, the pane, or /proc/<pid>/cmdline.
+# That "scoped" is an assumption, not an enforced property, so _sandbox_check_token_scope probes
+# the token's own scopes before the jail launches and warns or refuses (#98).
 
 # Pinned exactly: SRT is pre-1.0, so treat a bump as a change that re-runs the conformance suite.
 # HGT_SANDBOX_SRT_VERSION overrides; empty skips the check.
@@ -267,6 +269,48 @@ sandbox_argv() {
   HGT_SANDBOX_ARGV+=(srt --settings "$_SANDBOX_SETTINGS_FILE" --)
 }
 
+# _sandbox_check_token_scope — probe HGT_SANDBOX_GITHUB_TOKEN's classic OAuth scopes before the
+# jail launches (issue #98) and react to what's detectable. #81 verified the merge gate against
+# branch protection + can_approve_pull_request_reviews=false (SPEC §3) but never checked the
+# *premise* that the token itself is a narrow machine-user PAT — an admin/broad token is consumed
+# byte-identically and hands the jailed agent the power to merge/approve its own PR, defeating
+# that gate. `X-OAuth-Scopes` on a cheap authenticated call is the only cheap signal classic PATs
+# expose; fine-grained PATs and GitHub App tokens don't carry classic scopes at all, so GitHub
+# omits the header for them and there's nothing more to cheaply introspect (non-goal — warn on
+# what's detectable, document the rest). Silent when the header is absent/empty — that's the
+# expected shape for a correctly scoped token, and noise there would cry wolf on every launch.
+_sandbox_check_token_scope() {
+  local out scopes s deny=() broad=()
+  command -v gh >/dev/null 2>&1 || {
+    warn "sandbox: gh not on PATH — couldn't verify HGT_SANDBOX_GITHUB_TOKEN's scopes; proceeding on trust. ADR 0005 assumes a narrowly scoped machine-user PAT (contents+PRs on this repo only) — an admin/broad token in the jail could let the agent merge or approve its own PR, bypassing the human-merge gate (SPEC §3)."
+    return 0
+  }
+  out=$(GH_TOKEN="$HGT_SANDBOX_GITHUB_TOKEN" GITHUB_TOKEN="$HGT_SANDBOX_GITHUB_TOKEN" gh api -i user 2>/dev/null) || {
+    warn "sandbox: couldn't probe HGT_SANDBOX_GITHUB_TOKEN's scopes (gh api call failed) — proceeding on trust. ADR 0005 assumes a narrowly scoped machine-user PAT (contents+PRs on this repo only) — an admin/broad token in the jail could let the agent merge or approve its own PR, bypassing the human-merge gate (SPEC §3)."
+    return 0
+  }
+  scopes=$(printf '%s' "$out" | grep -i '^x-oauth-scopes:' | head -1) || true
+  scopes="${scopes#*:}"
+  scopes="${scopes//$'\r'/}"
+  [ -z "${scopes// /}" ] && return 0  # no classic scopes to read (fine-grained PAT / App token / none)
+
+  local -a scope_list; IFS=',' read -ra scope_list <<<"$scopes"
+  for s in "${scope_list[@]}"; do
+    s="${s# }"
+    case "$s" in
+      admin:*|delete_repo) deny+=("$s") ;;
+      repo|workflow|public_repo) broad+=("$s") ;;
+    esac
+  done
+
+  if [ "${#deny[@]}" -gt 0 ]; then
+    die "sandbox: HGT_SANDBOX_GITHUB_TOKEN carries admin-level scope(s): ${deny[*]}. ADR 0005 assumes a narrowly scoped machine-user PAT (contents+PRs on this repo only); an admin token hands the jailed agent that power — it could merge or approve its own PR, or push straight to main, bypassing the human-merge gate (SPEC §3). Refusing to launch — mint a scoped/fine-grained PAT limited to Contents+PRs on this repo, or unset HGT_SANDBOX_GITHUB_TOKEN to fall back to no push credential."
+  fi
+  if [ "${#broad[@]}" -gt 0 ]; then
+    warn "sandbox: HGT_SANDBOX_GITHUB_TOKEN carries broader scope(s) than push/PR needs: ${broad[*]}. ADR 0005 assumes a narrowly scoped machine-user PAT (contents+PRs on this repo only); an over-scoped token hands the jailed agent that power — it could merge or approve its own PR, bypassing the human-merge gate (SPEC §3). Prefer a fine-grained PAT limited to Contents+PRs on this repo."
+  fi
+}
+
 # _sandbox_credential WT — stage the scoped PAT (HGT_SANDBOX_GITHUB_TOKEN) for delivery INTO the
 # jail as an env var (#81), the same seam attended + unattended (#17). The value must never ride
 # the argv: send-keys would type it into the visible tmux pane, `run` would echo it, and
@@ -277,6 +321,7 @@ sandbox_argv() {
 # Sets _SANDBOX_ARGS_FILE. Writes a file — a launch-time side effect.
 _sandbox_credential() {
   local wt="$1" gh
+  _sandbox_check_token_scope   # #98: warn/fail-closed BEFORE staging the payload or touching the jail
   # A safe host dir for the transient payload: XDG_RUNTIME_DIR (per-user, 0700, tmpfs) when set,
   # else $TMPDIR / /tmp. HGT_SANDBOX_CRED_DIR overrides (the suite points it inside its tmpdir).
   local base="${HGT_SANDBOX_CRED_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}}"

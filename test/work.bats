@@ -736,3 +736,69 @@ bare_path() {
   [ ! -e "$TMP/pwned" ]
   grep -q "^srt-env GITHUB_TOKEN=gh'; touch $TMP/pwned; :\$" "$SHIM_LOG"
 }
+
+# --- token scope guard (#98) -------------------------------------------------------------------
+# #81 verified the merge gate against branch protection, never against the token itself — an
+# admin/broad HGT_SANDBOX_GITHUB_TOKEN was consumed byte-identically to a narrow one. These pin
+# the probe: warn (or refuse) BEFORE the jail launches, and stay silent for a correctly-scoped
+# token so the common case makes no noise.
+
+@test "publish: an admin-scoped token refuses to launch the jail (fail closed, #98)" {
+  work_env
+  export HGT_SANDBOX_CRED_DIR="$TMP/cred"
+  run env HGT_SANDBOX_GITHUB_TOKEN=ghp_ADMIN SHIM_GH_SCOPES='repo, admin:org' "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"admin"* ]]
+  [[ "$output" == *"machine-user PAT"* ]]        # names the assumption
+  [[ "$output" == *"merge"* ]]                   # names the risk
+  # not just any bwrap line: the userns preflight probe (_sandbox_userns_ok) always runs one of
+  # its own before the token check, so plain '^bwrap ' would pass even on a real regression —
+  # match the claude-wrapping jail specifically (its argv always opens --die-with-parent)
+  ! grep -q '^bwrap --die-with-parent ' "$SHIM_LOG"  # refused before the jail ever launches
+  ! grep -q '^claude ' "$SHIM_LOG"
+}
+
+@test "publish: a broad classic-scoped token warns but still launches (#98)" {
+  work_env
+  export HGT_SANDBOX_CRED_DIR="$TMP/cred"
+  run env HGT_SANDBOX_GITHUB_TOKEN=ghp_BROAD SHIM_GH_SCOPES='repo, workflow' "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"warn:"* ]]
+  [[ "$output" == *"repo"* ]]
+  [[ "$output" == *"workflow"* ]]
+  [[ "$output" == *"machine-user PAT"* ]]        # names the assumption
+  [[ "$output" == *"merge"* ]]                   # names the risk
+  grep -q '^srt --settings ' "$SHIM_LOG"  # warning is not a gate: the jail still launches
+}
+
+@test "publish: a public_repo-scoped token warns on a public repo (#98)" {
+  work_env
+  export HGT_SANDBOX_CRED_DIR="$TMP/cred"
+  # public_repo grants full push/PR/collaborator power on public repos — this repo is public, so
+  # it's as capable as `repo` here even though it reads as the "narrow" classic scope.
+  run env HGT_SANDBOX_GITHUB_TOKEN=ghp_PUBLIC SHIM_GH_SCOPES='public_repo' "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"warn:"* ]]
+  [[ "$output" == *"public_repo"* ]]
+  grep -q '^srt --settings ' "$SHIM_LOG"  # warning is not a gate: the jail still launches
+}
+
+@test "publish: a correctly fine-grained-scoped token launches without noise (#98)" {
+  work_env
+  export HGT_SANDBOX_CRED_DIR="$TMP/cred"
+  # no SHIM_GH_SCOPES set -> shim omits X-OAuth-Scopes, modeling a fine-grained PAT (no classic
+  # scopes to read at all)
+  run env HGT_SANDBOX_GITHUB_TOKEN=ghp_SCOPED "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"warn: sandbox: HGT_SANDBOX_GITHUB_TOKEN"* ]]
+  grep -q '^srt --settings ' "$SHIM_LOG"  # the claude jail launches, not just the preflight probe
+}
+
+@test "publish: scope probe failure warns but does not block launch (#98)" {
+  work_env
+  export HGT_SANDBOX_CRED_DIR="$TMP/cred"
+  run env HGT_SANDBOX_GITHUB_TOKEN=ghp_BAD SHIM_GH_SCOPES_EXIT=1 "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"couldn't probe"* ]]
+  grep -q '^srt --settings ' "$SHIM_LOG"  # the claude jail launches despite the probe failure
+}

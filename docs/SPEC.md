@@ -35,15 +35,21 @@ executes two ways against the same queue —
 - **CLI path (local):** `hgt` shells out to local git worktrees + Claude Code sessions
   for issues you want to drive by hand.
 
-You are the **Mayor** (what's worth doing, in what order), the **Witness** (is it
-correct), and the **Deacon** (is it safe to land). Agents are Polecats. The harness keeps
-a human in exactly those three seats and nowhere else. We are **not** building an
+You hold three seats and nothing else: **Mayor** (what's worth doing, in what order;
+sling it), **Witness** (keep it moving — unstick runs, answer `needs-human`), **Judge**
+(is it right, does it land — review and approve the merge). We are **not** building an
 autonomous swarm; we are building a paved road with a human at both ends — scoping and
-review — and automation in the middle.
+judging — and automation in the middle.
 
-Inspiration is Steve Yegge's Gastown, minus the chaos: keep the persistent-work-state and
-self-propelling-work ideas, drop the 20–30-agent burn, the auto-merge, and the rampaging
-supervisor.
+Inspiration is Steve Yegge's Gas Town, deliberately inverted. There, Mayor and Witness
+are agents and the human (the Overseer) feeds the machine; hgt collapses Overseer +
+Mayor into one human seat and keeps the Witness human. Judge is ours: Gas Town
+auto-merges (the Refinery serializes conflicts, judges nothing), so gt is one-sided —
+sling work (GUPP) — while hgt is two-sided — sling work, then take responsibility for
+the result. Gas Town's Deacon (a daemon that patrols agents to keep them on task) is
+reserved for future machinery pointed backwards: a patrol that keeps the *human* on
+task. Keep persistent work state and self-propelling work (our phrase; Yegge's concept
+is GUPP); drop the 20–30-agent burn, the auto-merge, and the rampaging supervisor.
 
 ---
 
@@ -121,7 +127,7 @@ them. (See §8 for the "why" links.)
 
 ---
 
-## 4. Persistence & recovery (the Gastown "beads" lesson)
+## 4. Persistence & recovery (the Gas Town "beads" lesson)
 
 Agent coordination state is ephemeral and dies on crash; **git is durable**. So:
 
@@ -162,8 +168,12 @@ hgt work <n>             # local execution: worktree + Claude session for issue 
 - handle teardown / `--resume`
 - **publish boundary (#81):** the sandboxed session holds no push credential by default;
   `HGT_SANDBOX_GITHUB_TOKEN` (a scoped machine-user PAT, delivered as jail env by sourcing an
-  unlinked fd — never on the argv/pane/cmdline, no persistent on-disk file) opts in a push/PR
-  path, the same seam attended + unattended. Gated on egress (#74).
+  unlinked fd — never on the argv/pane/cmdline, no persistent on-disk file) opts in a
+  push/PR path, the same seam attended + unattended. Gated on egress (#74). The "scoped" part is
+  a probed assumption, not enforced against the forge: `hgt work` checks the token's
+  `X-OAuth-Scopes` before launch and warns (fail-closed on clearly-admin scopes) if it looks
+  broader than push/PR needs (#98) — an admin/broad token would otherwise hand the jailed agent
+  the power to bypass the human-merge gate this section exists to hold.
 - respect branch stacking: default `--worktree` bases off `origin/HEAD`, which breaks
   stacks — use `worktree.baseRef: "head"` or fall back to manual
   `git worktree add -b <branch> <base>` for stacked work.
@@ -178,7 +188,7 @@ Exit criteria: you can create/label/snapshot issues and `hgt work <n>` opens a w
 session.
 
 **Phase 1 — CLI self-hosting (local loop).** Use `hgt work` to drive `hgt`'s own
-remaining development. You're now dogfooding the CLI half; human is Mayor/Witness/Deacon.
+remaining development. You're now dogfooding the CLI half; human is Mayor/Witness/Judge.
 Exit criteria: building hgt features through hgt's own local loop feels better than raw
 Claude Code.
 
@@ -197,7 +207,7 @@ context, observability on the queue.
 
 - **Language/runtime.** Two sane defaults: **TypeScript/Node** (fastest to dogfood given
   a frontend-deep author; thin `commander`/`oclif`) or **Go** (single static binary like
-  Gastown, trivial distribution). Pick one before writing code; don't drift.
+  Gas Town, trivial distribution). Pick one before writing code; don't drift.
 - **GitHub access from the CLI.** `gh` CLI shell-outs (fast to start) vs. Octokit/API
   (typed, testable). Lean `gh` for the POC, abstract behind one module so it's swappable.
 - **Snapshot storage.** Committed plan file in the worktree vs. a locked issue comment vs.

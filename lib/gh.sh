@@ -14,7 +14,7 @@
 _HGT_STATES='
 ready|0e8a16|Reviewed + snapshotted; an executor may pick this up
 in-progress|fbca04|An executor or human is actively working this
-needs-human|d93f0b|Blocked on a human decision (Mayor / Witness / Deacon)
+needs-human|d93f0b|Blocked on a human decision (Mayor / Witness / Judge)
 '
 
 # tracker_ensure_states — idempotently ensure every hgt state label exists with the right
