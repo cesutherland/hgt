@@ -99,10 +99,13 @@ gh api -X PUT repos/{owner}/{repo}/actions/permissions/workflow \
 #    PRs instead — which also makes `on: pull_request` CI fire on them (a
 #    github-actions[bot]-authored PR triggers nothing). Never the human reviewer's own
 #    token: the author of a PR cannot review it.
-#    Mint a CLASSIC PAT on that account, scoped `public_repo` + `workflow` — fine-grained
+#    Mint a CLASSIC PAT on that account, scoped `public_repo` and nothing else — fine-grained
 #    PATs can only target repos their account OWNS, and a collaborator owns nothing here.
-#    `public_repo` cannot reach private repos; `workflow` is what lets a PR branch carry
-#    .github/workflows/** changes. It can neither merge nor approve.
+#    `public_repo` cannot reach private repos, cannot merge, and cannot approve.
+#    Do NOT add `workflow` scope. `on: pull_request` runs the PR BRANCH's copy of a workflow
+#    file with repository secrets in scope, so a token that can push .github/workflows/**
+#    lets an executor branch grant itself permissions and read secrets with no human in the
+#    loop. Workflow edits stay a human/local job.
 gh api -X PUT repos/{owner}/{repo}/collaborators/MACHINE_USER -f permission=push
 gh secret set HGT_MACHINE_USER_TOKEN --app actions   # paste the classic PAT
 # -------------------------------------------------------------------------------

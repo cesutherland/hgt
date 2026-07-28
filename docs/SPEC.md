@@ -96,10 +96,15 @@ them. (See §8 for the "why" links.)
 - Do **not** grant `id-token: write` unless we actually federate to a cloud provider.
   Omitting it means the OIDC request token is never minted, removing that exfil target.
 - The executor's GitHub writes come from a **scoped machine-user PAT**, not `GITHUB_TOKEN`
-  (#79, [ADR 0008](adr/0008-issue-79-machine-user-prs.md)): a classic PAT, `public_repo` +
-  `workflow`, on a write-access collaborator that is neither `github-actions` nor the human
-  reviewer. That is what keeps the create+approve toggle off and makes CI fire on executor
-  PRs. The ambient `GITHUB_TOKEN` is demoted to **read-only** — it has no writes left to do.
+  (#79, [ADR 0008](adr/0008-issue-79-machine-user-prs.md)): a classic PAT scoped
+  **`public_repo` only**, on a write-access collaborator that is neither `github-actions` nor
+  the human reviewer. That is what keeps the create+approve toggle off and makes CI fire on
+  executor PRs. The ambient `GITHUB_TOKEN` is demoted to **read-only** — no writes left to do.
+- **Never grant that PAT `workflow` scope.** `on: pull_request` runs the PR *branch's* copy of
+  a workflow file, and same-repo PRs get repository secrets — so a token that can push
+  `.github/workflows/**` lets an executor branch write its own `permissions:` block and echo
+  secrets with no human merge involved. Executors edit workflow files but cannot push them;
+  that task goes to a human/local session.
 - The tradeoff is explicit: a PAT outlives the job and is readable by the agent it arms.
   Containment is its scope — push branches, open PRs; `public_repo` cannot reach private
   repos; it cannot merge or approve. A GitHub App (short-lived install tokens) is the

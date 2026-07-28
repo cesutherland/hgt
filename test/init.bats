@@ -35,6 +35,8 @@ load helper
   [[ "$output" == *"can_approve_pull_request_reviews=false"* ]] # no actions self-approval
   [[ "$output" == *"HGT_MACHINE_USER_TOKEN"* ]]                # #79: PRs come from a machine
   [[ "$output" == *"public_repo"* ]]                           #      user on a scoped classic PAT
+  [[ "$output" == *"Do NOT add \`workflow\` scope"* ]]         #      never pushable workflows:
+  [[ "$output" == *"pull_request"* ]]                          #      the branch's own file runs
 
   # printed, not applied: the shim log shows no ruleset/api mutation call
   ! grep -q 'rulesets' "$SHIM_LOG"

@@ -28,11 +28,48 @@ The toggle goes back OFF. The ambient `GITHUB_TOKEN` drops to `contents/issues/p
 read` — every write now flows through the PAT, and the only remaining consumer is the fail-loud
 guard's GraphQL query. A preflight step fails the run by name when the secret is absent.
 
-**Scope is `public_repo` + `workflow`, and classic not fine-grained.** Fine-grained PATs can
+**Scope is `public_repo` and nothing else; classic, not fine-grained.** Fine-grained PATs can
 only target repos the token's account *owns*; the machine user is a collaborator and owns
 nothing, so `cesutherland/hgt` is not selectable. `public_repo` suffices for a public repo and
-cannot reach private ones — containment by construction, not by policy. `workflow` is what lets
-a PR branch carry `.github/workflows/**` changes.
+cannot reach private ones — containment by construction, not by policy.
+
+### Why `workflow` scope is excluded
+
+The issue asked for `public_repo` + `workflow`, reasoning that `workflow` is required to push
+`.github/workflows/**`. It is — and that is exactly why the executor must not have it.
+
+`on: pull_request` runs the **PR branch's own copy** of the workflow file, and a same-repo PR
+gets repository secrets. So a machine-user PAT with `workflow` scope completes this chain, with
+no human anywhere in it:
+
+1. An injected executor run (v0 reads the raw issue body — the injection door is open by
+   design until #39/#40/#41) edits `ci.yml` to add `permissions: write-all` and a step echoing
+   `${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}` / `${{ secrets.HGT_MACHINE_USER_TOKEN }}`.
+2. It pushes the branch — allowed, because the PAT has `workflow`.
+3. It opens a PR — which now fires `pull_request`, because #79 made executor PRs
+   machine-authored (that trigger firing is the whole point of this ADR).
+4. The branch's malicious `ci.yml` executes with secrets in scope.
+
+Two independent things used to block that: `GITHUB_TOKEN` couldn't push workflow files, and
+bot-authored PRs fired no `pull_request` event at all (#58). #79 deliberately removes the
+second. Keeping the first is therefore load-bearing, not vestigial.
+
+Three arguments that look like defenses and are not, recorded so this doesn't get relitigated:
+
+- *"`issues` events run the workflow file from the default branch"* — true, and irrelevant.
+  The attack goes through `ci.yml`, not `hgt-execute.yml`.
+- *"`ci.yml` is powerless by design"* — true of **main's** copy. The branch's copy writes its
+  own `permissions:` block and names its own secrets.
+- *"Nothing on a PR branch takes effect until a human merges it"* — false for
+  `pull_request`-triggered workflows. That is the trigger #79 exists to make fire.
+
+The cost of excluding `workflow` is near zero: workflow edits go to a human/local session, the
+pre-#79 behavior. This PR's own workflow change was made that way.
+
+What remains, and is accepted: `ci.yml` still *runs* branch-supplied code (`./test/run.sh`) on
+`pull_request`. That is why §3 keeps it poor and powerless — `contents: read`, no secrets. With
+the workflow file itself unpushable, the blast radius of a hostile branch is arbitrary code on a
+runner holding nothing worth stealing.
 
 ## Why not the alternatives
 
@@ -51,12 +88,9 @@ a PR branch carry `.github/workflows/**` changes.
   Secrecy is not the containment — scope is: push branches, open PRs, no merge, no approve, no
   private repos, and branch protection still owns `main`. Injection that succeeds buys the
   attacker a PR that a human must still approve.
-- **The executor can now push workflow changes.** `workflow` scope grants what §3 withheld from
-  `GITHUB_TOKEN`. This is not the self-escalation §3 warns about: `issues` events run
-  `hgt-execute.yml` from the default branch, `ci.yml` is powerless by design, and nothing on a
-  PR branch takes effect until a human merges it. The prompt makes the executor flag such
-  changes in the PR body, and the guard's workflow-specific error now points at a missing
-  `workflow` scope rather than at policy.
+- **The executor still cannot push workflow changes**, unchanged from pre-#79 (see above for
+  why). The prompt tells it to STOP loudly and the fail-loud guard names that cause when a run
+  touching `.github/workflows/**` produces no PR. Those tasks are human/local work.
 - **`hgt-review.yml` still runs as `GITHUB_TOKEN`.** Out of scope here (#79 is the executor's
   PR-creation path). Its #58 gotcha survives — pushes to a PR branch still don't re-trigger CI —
   and its success guard filters comments on `github-actions[bot]`, which a token swap would
@@ -65,12 +99,12 @@ a PR branch carry `.github/workflows/**` changes.
   into the jail; the two paths converge on the same account but are wired separately.
 - **Audit the live PAT's scopes.** The `hgtbot` token in use for the sandbox path today carries
   `repo`, not `public_repo` — broader than this ADR calls for, and `repo` reaches private repos.
-  Mint the Actions secret at `public_repo` + `workflow` and re-scope the sandbox one to match.
+  Mint the Actions secret at `public_repo` only and re-scope the sandbox one to match.
 
 ## Operator runbook (manual, repo-admin — not done by this PR)
 
 1. `gh secret set HGT_MACHINE_USER_TOKEN --app actions` — paste a classic PAT minted on the
-   machine user with **`public_repo` + `workflow`** only.
+   machine user with **`public_repo` and nothing else**. Not `workflow`, not `repo`.
 2. Confirm the machine user has write access:
    `gh api -X PUT repos/cesutherland/hgt/collaborators/hgtbot -f permission=push`.
 3. Flip the toggle back off — **after** step 1, or the next `ready` issue has no way to open a
