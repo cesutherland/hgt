@@ -125,4 +125,5 @@ runner holding nothing worth stealing.
 4. Label a `ready` issue and check the resulting PR: authored by the machine user, `ci / test`
    running on it unprompted, Carl's approval still the only one that counts.
 
-`hgt init` prints steps 1–3 as part of the branch-protection script (`forge_print_ruleset`).
+`forge_print_ruleset` (what `hgt init` prints) carries steps 1–3 in this order, after the
+ruleset itself — machine user and secret before the toggle, for the reason in step 3.
