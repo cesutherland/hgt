@@ -95,28 +95,24 @@ them. (See §8 for the "why" links.)
   worth stealing.
 - Do **not** grant `id-token: write` unless we actually federate to a cloud provider.
   Omitting it means the OIDC request token is never minted, removing that exfil target.
-- The executor's GitHub writes come from a **scoped machine-user PAT**, not `GITHUB_TOKEN`
-  (#79, [ADR 0008](adr/0008-issue-79-machine-user-prs.md)): a classic PAT scoped
-  **`public_repo` only**, on a write-access collaborator that is neither `github-actions` nor
-  the human reviewer. That is what keeps the create+approve toggle off and makes CI fire on
-  executor PRs. The ambient `GITHUB_TOKEN` is demoted to **read-only** — no writes left to do.
-- **Never grant that PAT `workflow` scope.** `on: pull_request` runs the PR *branch's* copy of
-  a workflow file, and same-repo PRs get repository secrets — so a token that can push
-  `.github/workflows/**` lets an executor branch write its own `permissions:` block and echo
-  secrets with no human merge involved. Executors edit workflow files but cannot push them;
-  that task goes to a human/local session.
-- The tradeoff is explicit: a PAT outlives the job and is readable by the agent it arms.
-  Containment is its scope — push branches, open PRs; `public_repo` cannot reach private
-  repos; it cannot merge or approve. A GitHub App (short-lived install tokens) is the
-  endgame (#56/#68).
+- The executor's GitHub writes come from a **machine-user PAT**, not `GITHUB_TOKEN`
+  (#79, [ADR 0008](adr/0008-issue-79-machine-user-prs.md)): classic, **`public_repo` only**,
+  on a write-access collaborator that is neither `github-actions` nor the human reviewer.
+  That keeps the create+approve toggle off and fires CI on executor PRs; the ambient
+  `GITHUB_TOKEN` drops to **read-only**.
+- **Never grant that PAT `workflow` scope.** A token that can push `.github/workflows/**`
+  is a self-escalation chain with no human in it — the ADR walks it. Executors edit
+  workflow files but cannot push them; those tasks go to a human/local session.
+- The tradeoff is explicit: a PAT outlives the job and is readable by the agent it arms
+  (#110). Containment is scope — no merge, no approve, no private repos. A GitHub App is
+  the endgame (#56/#68).
 
 **Branch protection on `main`** (a ruleset)
 - Require PR + at least one **human** review before merge.
 - Do **not** add `github-actions` (or any executor app) to any bypass list.
 - **Disable** "Allow GitHub Actions to create and approve pull requests" — otherwise an
   agent can rubber-stamp its own PR and the human gate evaporates. GitHub bundles *create*
-  and *approve* into that one switch, so an executor running as `github-actions` can't open
-  a PR with it off; the machine user above is how we keep it off (#79).
+  and *approve* into the one switch; the machine user above is what lets it stay off (#79).
 - **Enable** "Require approval of the most recent reviewable push."
 - Per-branch write isn't a token scope — it's branch protection applied to the ref. The
   executor pushes feature branches freely; `main` rejects direct writes automatically.

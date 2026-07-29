@@ -89,22 +89,19 @@ runner holding nothing worth stealing.
 ## Consequences / residuals
 
 - **A resident credential in the injection surface — #110.** Unlike `GITHUB_TOKEN`, the PAT
-  outlives the job, and checkout writes it into the workspace
-  `.git/config` where the agent can read it and echo it into the world-readable transcript
-  artifact (#64). Scope is what bounds it today: push branches, open PRs, no merge, no approve,
-  no private repos, branch protection still owns `main` — injection that succeeds buys the
-  attacker a PR a human must still approve. The real fix is to stop handing the agent the
-  credential at all (a post-agent ship step), which is a design change, not a wiring fix.
+  outlives the job, and checkout writes it into the workspace `.git/config` where the agent
+  can read it and echo it into the world-readable transcript artifact (#64). Scope bounds it
+  today — injection that succeeds buys a PR a human must still approve. The real fix is to
+  stop handing the agent the credential at all (a post-agent ship step): a design change,
+  not a wiring fix.
 - **The executor still cannot push workflow changes**, unchanged from pre-#79 (see above for
   why). The prompt tells it to STOP loudly and the fail-loud guard names that cause when a run
   touching `.github/workflows/**` produces no PR. Those tasks are human/local work.
-- **`hgt-review.yml` still runs as `GITHUB_TOKEN`.** Out of scope here (#79 is the executor's
-  PR-creation path). Its #58 gotcha survives, and observed on this very PR the symptom is not
-  "no run" but a `pull_request` run created with `actor=github-actions[bot]` that sits at
-  `action_required` until a human clicks approve — so the tip of a review-agent-pushed PR
-  carries no green check —
-  and its success guard filters comments on `github-actions[bot]`, which a token swap would
-  break. Its own slice.
+- **`hgt-review.yml` still runs as `GITHUB_TOKEN`.** Out of scope (#79 is the executor's
+  PR-creation path). Its #58 symptom survives — observed on this very PR: the `pull_request`
+  run arrives as `actor=github-actions[bot]` and sits at `action_required` until a human
+  approves, so the PR tip shows no green check. Its success guard also filters comments on
+  `github-actions[bot]`, which a token swap would break. Its own slice.
 - **The local path is #68.** `HGT_SANDBOX_GITHUB_TOKEN` (#81) already carries a machine-user PAT
   into the jail; the two paths converge on the same account but are wired separately.
 - **Audit the live PAT's scopes.** The `hgtbot` token in use for the sandbox path today carries

@@ -69,12 +69,10 @@ These are settled design decisions, not suggestions:
   federate to a cloud provider.
 - **Executor identity:** the Actions executor pushes and opens PRs as a **machine user** on
   a classic PAT scoped `public_repo` only — never as `github-actions`, never as the human
-  reviewer, and never with `workflow` scope (issue #79,
-  [ADR 0008](docs/adr/0008-issue-79-machine-user-prs.md)). That keeps the create+approve
-  toggle off, makes CI run on executor PRs, and leaves the ambient `GITHUB_TOKEN` read-only.
-  Executors can edit `.github/workflows/**` but not push it: `pull_request` runs the
-  branch's own workflow file with secrets in scope, so a pushable workflow edit would be a
-  self-escalation with no human in the loop.
+  reviewer, never with `workflow` scope (a pushable workflow file is a self-escalation —
+  [ADR 0008](docs/adr/0008-issue-79-machine-user-prs.md) walks the chain). That keeps the
+  create+approve toggle off, fires CI on executor PRs, and leaves the ambient
+  `GITHUB_TOKEN` read-only.
 - **Branch protection on `main`:** require a PR and at least one **human** review before
   merge; no executor app on any bypass list; disable "Allow GitHub Actions to create and
   approve pull requests"; enable "Require approval of the most recent reviewable push."
