@@ -13,9 +13,13 @@ EXEC_WF="$HGT_REPO/.github/workflows/hgt-execute.yml"
   # Two spots, not one. `github_token:` alone leaves checkout persisting the ambient token as
   # the push credential — the branch then lands as `github-actions`, the create+approve toggle
   # has to come back ON, and every other knob still looks correct. That is the whole failure.
-  grep -q 'github_token: ${{ secrets.HGT_MACHINE_USER_TOKEN }}' "$EXEC_WF"
-  grep -q 'token: ${{ secrets.HGT_MACHINE_USER_TOKEN }}' "$EXEC_WF"
-  [ "$(grep -c 'secrets.HGT_MACHINE_USER_TOKEN' "$EXEC_WF")" -ge 3 ]  # + the preflight
+  #
+  # Anchored whole-line, because `token:` is a SUFFIX of `github_token:` — an unanchored
+  # `grep -q 'token: ...'` is satisfied by the action's line and passes with checkout's
+  # wiring deleted. Counting occurrences doesn't save it either: the preflight's own error
+  # message names the secret, so the total stays >= 3 with the line gone.
+  grep -qE '^ +github_token: \$\{\{ secrets\.HGT_MACHINE_USER_TOKEN \}\}$' "$EXEC_WF"
+  grep -qE '^ +token: \$\{\{ secrets\.HGT_MACHINE_USER_TOKEN \}\}$' "$EXEC_WF"
 }
 
 @test "hgt-execute: the ambient workflow token stays read-only (#79)" {

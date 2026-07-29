@@ -99,7 +99,10 @@ runner holding nothing worth stealing.
   why). The prompt tells it to STOP loudly and the fail-loud guard names that cause when a run
   touching `.github/workflows/**` produces no PR. Those tasks are human/local work.
 - **`hgt-review.yml` still runs as `GITHUB_TOKEN`.** Out of scope here (#79 is the executor's
-  PR-creation path). Its #58 gotcha survives — pushes to a PR branch still don't re-trigger CI —
+  PR-creation path). Its #58 gotcha survives, and observed on this very PR the symptom is not
+  "no run" but a `pull_request` run created with `actor=github-actions[bot]` that sits at
+  `action_required` until a human clicks approve — so the tip of a review-agent-pushed PR
+  carries no green check —
   and its success guard filters comments on `github-actions[bot]`, which a token swap would
   break. Its own slice.
 - **The local path is #68.** `HGT_SANDBOX_GITHUB_TOKEN` (#81) already carries a machine-user PAT

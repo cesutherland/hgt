@@ -19,11 +19,12 @@
 #     target); passing any explicit `github_token` also skips claude-code-action's App/OIDC
 #     path, which is how #57/#13 stay closed. Auth accepts either a Claude subscription OAuth
 #     token or an API key; whichever secret is set is used (OAuth wins if both are).
-#   - §3 tradeoff, stated plainly: unlike GITHUB_TOKEN the PAT outlives the job, and checkout
-#     persists it in the workspace `.git/config` where the agent can read it. Containment is
-#     the narrow scope, not secrecy — push branches and open PRs; `public_repo` cannot reach
-#     private repos; it cannot merge and cannot approve; branch protection still owns `main`.
-#     A GitHub App with short-lived install tokens is the cleaner endgame (#56/#68).
+#   - §3 tradeoff, stated plainly (#110): unlike GITHUB_TOKEN the PAT outlives the job, and
+#     checkout persists it in the workspace `.git/config` where the agent can read it — and
+#     echo into the world-readable transcript artifact below. Containment is the narrow scope,
+#     not secrecy — push branches and open PRs; `public_repo` cannot reach private repos; it
+#     cannot merge and cannot approve; branch protection still owns `main`. #110 removes the
+#     credential from the agent's reach entirely; a GitHub App is the endgame (#56/#68).
 #   - The action is pinned to a commit SHA for v1.0.179 (≥ v1.0.94, the auth-bypass fix).
 #   - `main` is untouchable: the executor pushes a feature branch and opens a PR; branch
 #     protection rejects direct writes to `main` and forbids Actions from approving PRs.
@@ -73,9 +74,10 @@ jobs:
     if: github.event.label.name == 'ready'
     runs-on: ubuntu-latest
     steps:
-      # Fail loud and early when the machine-user PAT is missing. Without it checkout persists
-      # the ambient (now read-only) token, the agent's push dies mid-run, and the failure
-      # surfaces only as "no PR" for someone to spelunk out of a transcript. Name the cause.
+      # Fail loud and early when the machine-user PAT is missing. An unset secret makes
+      # checkout's `token:` an empty string rather than a fallback, so the clone still works
+      # (public repo) and the run dies later at the agent's push — surfacing only as "no PR"
+      # for someone to spelunk out of a transcript. Name the cause up front instead.
       - name: Preflight — machine-user token must be present
         env:
           MACHINE_TOKEN: ${{ secrets.HGT_MACHINE_USER_TOKEN }}
