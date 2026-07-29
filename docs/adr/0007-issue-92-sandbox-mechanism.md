@@ -118,22 +118,6 @@ them when the pin moves.
 The `env -i` mitigation below was confirmed the hard way: a `GH_TOKEN` exported in the calling
 shell does reach the jail without it, and SRT ships no default `unsetEnvVars`.
 
-## Amendment — what #112 found (0.0.67)
-
-The first real `hgt work` after #95 landed failed closed: `Failed to create bridge sockets
-after 5 attempts`. `sandbox_argv` was passing `TMPDIR=<worktree>/.hgt/tmp` into the `env -i`
-prefix srt itself runs under — a worktree-length path. Host-side srt binds its socat bridge
-sockets at `$TMPDIR/claude-http-<16hex>.sock` (`linux-sandbox-utils.js:436`), ~113 chars for a
-typical worktree path, over AF_UNIX's 107-byte limit. The bind failed silently and srt gave up
-after 5 polls.
-
-The setting was built on the wrong model: it assumed hgt needed to hand srt a writable TMPDIR
-for the *jail*, but SRT overrides the jail's own TMPDIR to `/tmp/claude` (default-writable;
-`CLAUDE_CODE_TMPDIR` is the seam to move it) regardless of what the host process passes in. Only
-host srt itself ever saw hgt's value — and that's exactly the process whose own tmp-path
-assumptions it broke. Fix: don't set `TMPDIR` in `sandbox_argv` at all; `GH_CONFIG_DIR` still
-points at the worktree-local scratch dir, which has no such constraint.
-
 ## Consequences / residuals
 
 - **Pre-1.0 dependency.** `0.0.67`, "research preview," config format may evolve. Pin an exact
