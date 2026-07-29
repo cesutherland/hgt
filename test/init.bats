@@ -36,6 +36,18 @@ load helper
   [[ "$output" == *'"required_approving_review_count": 1'* ]]  # PR + >=1 human review
   [[ "$output" == *'"bypass_actors": []'* ]]                   # no executor-app bypass
   [[ "$output" == *"can_approve_pull_request_reviews=false"* ]] # no actions self-approval
+  [[ "$output" == *"HGT_MACHINE_USER_TOKEN"* ]]                # #79: PRs come from a machine
+  [[ "$output" == *"public_repo"* ]]                           #      user on a scoped classic PAT
+  [[ "$output" == *"Do NOT add \`workflow\` scope"* ]]         #      never pushable workflows:
+  [[ "$output" == *"pull_request"* ]]                          #      the branch's own file runs
+
+  # Order is part of the contract, not cosmetics: with the toggle off and no machine-user
+  # secret set, the executor has no identity that can open a PR, so every `ready` issue in
+  # that window dies at `gh pr create`. Substring asserts alone would miss a swap.
+  secret_line=$(printf '%s\n' "$output" | grep -n 'gh secret set HGT_MACHINE_USER_TOKEN' | cut -d: -f1)
+  toggle_line=$(printf '%s\n' "$output" | grep -n 'can_approve_pull_request_reviews=false' | cut -d: -f1)
+  [ -n "$secret_line" ] && [ -n "$toggle_line" ]
+  [ "$secret_line" -lt "$toggle_line" ]
 
   # printed, not applied: the shim log shows no ruleset/api mutation call
   ! grep -q 'rulesets' "$SHIM_LOG"

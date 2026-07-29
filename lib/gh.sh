@@ -86,9 +86,21 @@ gh api -X POST repos/{owner}/{repo}/rulesets --input - <<'JSON'
 }
 JSON
 
-# 2) Disable "Allow GitHub Actions to create and approve pull requests" and default the
-#    workflow token to read-only. The executor workflow requests the narrow writes it
-#    needs (contents: write, pull-requests: write) explicitly — nothing more.
+# 2) The machine user (#79, ADR 0008). Step 3's toggle blocks PR *creation* by
+#    `github-actions` too, so a dedicated bot collaborator opens the PRs instead — which
+#    is also what makes `on: pull_request` CI fire on them. Never the human reviewer's
+#    own token: the author of a PR cannot review it.
+#    Mint a CLASSIC PAT on that account, scoped `public_repo` and nothing else —
+#    fine-grained PATs can't target a repo the account doesn't own.
+#    Do NOT add `workflow` scope: a token that can push .github/workflows/** is a
+#    self-escalation with no human in the loop — the ADR walks the chain. Workflow
+#    edits stay human/local.
+gh api -X PUT repos/{owner}/{repo}/collaborators/MACHINE_USER -f permission=push
+gh secret set HGT_MACHINE_USER_TOKEN --app actions   # paste the classic PAT
+
+# 3) Disable "Allow GitHub Actions to create and approve pull requests" and default the
+#    workflow token to read-only. AFTER step 2: with the toggle off and no PAT set, every
+#    `ready` issue in that window dies at `gh pr create`.
 gh api -X PUT repos/{owner}/{repo}/actions/permissions/workflow \
   -F default_workflow_permissions=read \
   -F can_approve_pull_request_reviews=false

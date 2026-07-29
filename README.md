@@ -85,10 +85,15 @@ holds **no** secret beyond the two it requires.
 
 These are settled design decisions, not suggestions:
 
-- **Secrets:** the runner gets only `ANTHROPIC_API_KEY` + a minimal `GITHUB_TOKEN`
-  (`contents: write` + `pull-requests: write`, nothing more). No cloud creds, no
-  publish/deploy tokens. No `id-token: write` unless we actually federate to a cloud
-  provider.
+- **Secrets:** the runner gets only a Claude auth secret and one narrow GitHub credential.
+  No cloud creds, no publish/deploy tokens. No `id-token: write` unless we actually
+  federate to a cloud provider.
+- **Executor identity:** the Actions executor pushes and opens PRs as a **machine user** on
+  a classic PAT scoped `public_repo` only — never as `github-actions`, never as the human
+  reviewer, never with `workflow` scope (a pushable workflow file is a self-escalation —
+  [ADR 0008](docs/adr/0008-issue-79-machine-user-prs.md) walks the chain). That keeps the
+  create+approve toggle off, fires CI on executor PRs, and leaves the ambient
+  `GITHUB_TOKEN` read-only.
 - **Branch protection on `main`:** require a PR and at least one **human** review before
   merge; no executor app on any bypass list; disable "Allow GitHub Actions to create and
   approve pull requests"; enable "Require approval of the most recent reviewable push."
