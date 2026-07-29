@@ -21,8 +21,11 @@
 _SANDBOX_SRT_VERSION="${HGT_SANDBOX_SRT_VERSION-0.0.67}"
 
 # `network` is a required settings key and SRT always drops the net namespace, so there is no
-# unrestricted mode to defer with. Placeholder until #74 derives it.
-_SANDBOX_ALLOWED_DOMAINS='api.anthropic.com github.com api.github.com'
+# unrestricted mode to defer with. The fixed part of the allowlist: what claude itself needs.
+# Settling anything beyond the API host (statsig/sentry telemetry, OAuth refresh) needs one
+# attended `hgt work` run to observe traffic against — undone, tracked by #74's follow-up.
+# The forge (github.com et al.) is NOT listed here: it's derived per-worktree, below.
+_SANDBOX_ALLOWED_DOMAINS_BASE='api.anthropic.com'
 
 # Runtime deps under $HOME re-allowed for reading over the blanket `denyRead: [$HOME]`.
 # Machine-specific (node via nvm, the claude launcher under ~/.local), so extend via
@@ -140,6 +143,59 @@ _sandbox_extant() {
   return 0
 }
 
+# _sandbox_remote_host WT — the bare host of WT's `origin` remote, or nothing if it doesn't parse
+# to a network host (local path, unparseable IPv6 literal). Salvaged from the closed PR #90, with
+# its bugs fixed: the authority is cut off at the first `/` BEFORE userinfo is stripped — do it
+# in the other order and a path segment containing `@` (`https://host/a@b/c.git`) mis-parses as
+# userinfo — then the port is stripped last. SRT rejects a domain pattern containing `:`, so
+# whatever's left is validated against a plain hostname charset rather than trusted as-is: that
+# catches a `[::1]`-style IPv6 literal (brackets/colons survive the strips above) same as a
+# straight-up unparseable string.
+_sandbox_remote_host() {
+  local wt="$1" url host
+  url=$(git -C "$wt" remote get-url origin 2>/dev/null) || return 0
+  [ -n "$url" ] || return 0
+
+  case "$url" in
+    *://*)
+      host=${url#*://}   # strip the scheme
+      host=${host%%/*}   # cut the authority off at the first path slash...
+      host=${host##*@}   # ...THEN strip userinfo...
+      host=${host%%:*}   # ...THEN strip the port
+      ;;
+    *@*:*)
+      host=${url#*@}     # scp-like git@host:path
+      host=${host%%:*}
+      ;;
+    *)
+      return 0           # local path or otherwise not a network remote
+      ;;
+  esac
+
+  case "$host" in
+    '' | *[!a-zA-Z0-9.-]*) return 0 ;;
+  esac
+  printf '%s\n' "$host"
+}
+
+# _sandbox_egress_domains WT — the full domain allowlist for WT: the fixed Anthropic API, WT's
+# own forge (derived from its remote, not hardcoded, so a repo on another forge isn't silently
+# granted GitHub and denied its own), GitHub's separate API host when the forge IS github.com
+# (`gh pr create` needs it; GitHub Enterprise serves /api/v3 off the SAME host, so this sibling
+# is not invented for any other host), and whatever HGT_SANDBOX_EGRESS_ALLOW adds — the seam for
+# e.g. a private npm registry, matching HGT_SANDBOX_RO_BIND/SETENV.
+_sandbox_egress_domains() {
+  local wt="$1" host
+  printf '%s' "$_SANDBOX_ALLOWED_DOMAINS_BASE"
+  host=$(_sandbox_remote_host "$wt")
+  if [ -n "$host" ]; then
+    printf ' %s' "$host"
+    [ "$host" = github.com ] && printf ' api.github.com'
+  fi
+  [ -n "${HGT_SANDBOX_EGRESS_ALLOW:-}" ] && printf ' %s' "$HGT_SANDBOX_EGRESS_ALLOW"
+  return 0
+}
+
 # _sandbox_settings WT — write the settings file that defines the jail, plus the private scratch
 # dir it uses for temp state. Sets _SANDBOX_SETTINGS_FILE and _SANDBOX_SCRATCH. Rewritten on every
 # launch, never stamped: it sits inside the agent's own write grant, so a never-clobber write would
@@ -182,7 +238,7 @@ _sandbox_settings() {
   {
     printf '{\n'
     printf '  "network": {\n'
-    printf '    "allowedDomains": %s,\n' "$(_json_arr $_SANDBOX_ALLOWED_DOMAINS)"
+    printf '    "allowedDomains": %s,\n' "$(_json_arr $(_sandbox_egress_domains "$wt"))"
     printf '    "deniedDomains": [],\n'
     # Without this an unlisted host consults an ask-callback, which in a detached pane either hangs
     # or auto-allows.

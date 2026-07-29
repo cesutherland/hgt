@@ -491,12 +491,74 @@ bare_path() {
   # git identity is readable, so commits carry the human's name without a writable ~/.gitconfig
   [[ "$cfg" == *"\"$HOME/.gitconfig\""* ]]
   # SRT always drops the net namespace and requires a network block, so the swap can't be
-  # network-neutral. This fixed list is a placeholder — deriving it belongs to #74.
+  # network-neutral. github.com/api.github.com aren't hardcoded — they're derived from the
+  # worktree's own origin remote (the git shim defaults it to this fixture repo); see the
+  # dedicated derivation tests below (#74).
   [[ "$cfg" == *'"allowedDomains": ["api.anthropic.com","github.com","api.github.com"]'* ]]
   [[ "$cfg" == *'"strictAllowlist": true'* ]]
   # gpg-signing forced off inside — the agent has no ~/.gnupg, can't sign as the human
   grep -q '^srt-env GIT_CONFIG_KEY_0=commit.gpgsign$' "$SHIM_LOG"
   grep -q '^srt-env GIT_CONFIG_VALUE_0=false$'        "$SHIM_LOG"
+}
+
+@test "sandbox: the egress allowlist is derived from the worktree's own remote, not hardcoded" {
+  work_env
+  # A non-GitHub forge must be granted its OWN host, and must NOT get github.com/api.github.com
+  # for free — the thing #74 is fixing: before this, every repo got the same fixed host list
+  # regardless of where it actually pushes.
+  SHIM_GIT_REMOTE_URL="https://gitlab.example.com/group/proj.git" run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  local cfg; cfg=$(srt_cfg)
+  [[ "$cfg" == *'"allowedDomains": ["api.anthropic.com","gitlab.example.com"]'* ]]
+}
+
+@test "sandbox: a credentialed, ported https remote parses down to a bare host" {
+  work_env
+  # Userinfo and port must both be stripped, in the order that avoids PR #90's bug: cutting the
+  # authority off at the first path slash BEFORE stripping userinfo, or a path segment containing
+  # "@" mis-parses as userinfo. And no invented api. sibling — that's github.com-specific.
+  SHIM_GIT_REMOTE_URL="https://x-access-token:ghp_sekret@ghe.example.com:8443/org/repo.git" \
+    run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  local cfg; cfg=$(srt_cfg)
+  [[ "$cfg" == *'"allowedDomains": ["api.anthropic.com","ghe.example.com"]'* ]]
+  [[ "$cfg" != *"ghp_sekret"* ]]
+  [[ "$cfg" != *"8443"* ]]
+}
+
+@test "sandbox: a path segment containing @ does not get mistaken for userinfo" {
+  work_env
+  # PR #90's exact bug: stripping userinfo before cutting the authority off at the path turns
+  # https://host/a@b/c.git into host "b" instead of "host".
+  SHIM_GIT_REMOTE_URL="https://host.example.com/a@b/c.git" run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  [[ "$(srt_cfg)" == *'"allowedDomains": ["api.anthropic.com","host.example.com"]'* ]]
+}
+
+@test "sandbox: an unparseable remote (local path) contributes nothing, not a bad pattern" {
+  work_env
+  SHIM_GIT_REMOTE_URL=/home/user/bare-repo.git run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  [[ "$(srt_cfg)" == *'"allowedDomains": ["api.anthropic.com"]'* ]]
+}
+
+@test "sandbox: an unparseable IPv6-literal remote contributes nothing, not a bad pattern" {
+  work_env
+  # SRT rejects a domain pattern containing ":" outright — this must never reach the settings
+  # file rather than relying on SRT to refuse it.
+  SHIM_GIT_REMOTE_URL="https://user@[::1]:22/repo.git" run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  local cfg; cfg=$(srt_cfg)
+  [[ "$cfg" == *'"allowedDomains": ["api.anthropic.com"]'* ]]
+  [[ "$cfg" != *'::1'* ]]
+}
+
+@test "sandbox: HGT_SANDBOX_EGRESS_ALLOW extends the egress allowlist (dogfooding seam)" {
+  work_env
+  # Matches HGT_SANDBOX_RO_BIND/SETENV: the first in-jail npm install is a config change, not code.
+  HGT_SANDBOX_EGRESS_ALLOW="registry.npmjs.org" run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  [[ "$(srt_cfg)" == *'"allowedDomains": ["api.anthropic.com","github.com","api.github.com","registry.npmjs.org"]'* ]]
 }
 
 @test "sandbox: the jail can't read ~/.ssh or the admin gh auth, and can't rewrite its own policy" {

@@ -25,6 +25,14 @@ if [ "${1:-}" = worktree ] && [ "${2:-}" = add ]; then
   done
 fi
 
+# `-C <wt> remote get-url origin` — the egress-allowlist derivation (#74) asks for the worktree's
+# own forge. SHIM_GIT_REMOTE_URL overrides (default: the fixture repo's real github remote, so
+# every test not naming its own remote still derives github.com/api.github.com as before).
+if [ "${1:-}" = -C ] && [ "${3:-}" = remote ] && [ "${4:-}" = get-url ]; then
+  printf '%s\n' "${SHIM_GIT_REMOTE_URL:-https://github.com/cesutherland/hgt.git}"
+  exit 0
+fi
+
 # `-C <wt> rev-parse ... --git-common-dir` — the sandbox seam (#67) asks git for the repo's
 # shared .git so it can grant the jail write access to it. Echo `<wt>/.git` off the `-C` value (a
 # real worktree's common dir lives under the main repo, but the exact path isn't hgt's contract —
