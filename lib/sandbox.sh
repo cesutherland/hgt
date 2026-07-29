@@ -216,11 +216,15 @@ sandbox_argv() {
   for var in $_SANDBOX_ENV_PASS ${HGT_SANDBOX_SETENV:-}; do
     [ -n "${!var:-}" ] && HGT_SANDBOX_ARGV+=("$var=${!var}")
   done
-  # /tmp isn't writable in the jail (writes are deny-by-default and we grant only the worktree and
-  # git dir), so temp state goes to a private dir. GH_CONFIG_DIR points there too: the old tmpfs
-  # $HOME gave gh a scratch config for free, and without one gh reaches for the real ~/.config/gh —
-  # the admin credential this jail exists to keep away from the agent.
-  HGT_SANDBOX_ARGV+=("TMPDIR=$_SANDBOX_SCRATCH" "GH_CONFIG_DIR=$_SANDBOX_SCRATCH/gh")
+  # GH_CONFIG_DIR points at a private dir inside the worktree: the old tmpfs $HOME gave gh a
+  # scratch config for free, and without one gh reaches for the real ~/.config/gh — the admin
+  # credential this jail exists to keep away from the agent. TMPDIR is deliberately NOT set here
+  # (#112): host-side srt binds its socat bridge sockets at $TMPDIR/claude-http-<16hex>.sock, and
+  # a worktree-length path pushes that past AF_UNIX's 107-byte limit — the bind fails silently
+  # and srt gives up after 5 polls. It was dead weight anyway: SRT overrides the *jail's* TMPDIR
+  # to /tmp/claude (default-writable; CLAUDE_CODE_TMPDIR is the seam to move it), so only host
+  # srt ever saw hgt's value.
+  HGT_SANDBOX_ARGV+=("GH_CONFIG_DIR=$_SANDBOX_SCRATCH/gh")
 
   # git config injected via the numbered GIT_CONFIG_* env (no ~/.gitconfig write needed). Always
   # force gpg-signing off — the jail has no ~/.gnupg, so the agent can't sign as the human. Always
