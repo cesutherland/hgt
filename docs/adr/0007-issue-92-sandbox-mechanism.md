@@ -120,13 +120,6 @@ shell does reach the jail without it, and SRT ships no default `unsetEnvVars`.
 
 ## Amendment — what #112 found (0.0.67)
 
-- **Never set `TMPDIR` in the prefix that launches `srt`.** Host-side srt binds its socat
-  bridge sockets at `os.tmpdir()/claude-http-<16hex>.sock` (`linux-sandbox-utils.js:436`); a
-  worktree-deep `TMPDIR` pushes that path past the 107-byte `AF_UNIX` limit, the bind fails
-  silently, and srt dies with "Failed to create bridge sockets after 5 attempts". The setting
-  was dead weight regardless: SRT overrides the *jail's* `TMPDIR` to `/tmp/claude`
-  (default-writable; `CLAUDE_CODE_TMPDIR` is the seam to move it), so only host srt ever saw
-  hgt's value. Under `env -i` with no `TMPDIR`, `os.tmpdir()` falls back to `/tmp`.
 - **`/tmp/claude` is a default write path, but SRT never creates it on Linux.** Paths that
   don't exist host-side are skipped, not bound (the `--bind-try` finding above, now on the
   allow side), so on a fresh box the jail's `/tmp` is read-only, `TMPDIR` points at a
