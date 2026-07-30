@@ -127,6 +127,11 @@ shell does reach the jail without it, and SRT ships no default `unsetEnvVars`.
   was dead weight regardless: SRT overrides the *jail's* `TMPDIR` to `/tmp/claude`
   (default-writable; `CLAUDE_CODE_TMPDIR` is the seam to move it), so only host srt ever saw
   hgt's value. Under `env -i` with no `TMPDIR`, `os.tmpdir()` falls back to `/tmp`.
+- **`/tmp/claude` is a default write path, but SRT never creates it on Linux.** Paths that
+  don't exist host-side are skipped, not bound (the `--bind-try` finding above, now on the
+  allow side), so on a fresh box the jail's `/tmp` is read-only, `TMPDIR` points at a
+  directory that isn't there, and every `mktemp` dies. hgt pre-creates `/tmp/claude` before
+  each launch.
 
 ## Consequences / residuals
 

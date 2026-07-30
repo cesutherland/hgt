@@ -156,6 +156,10 @@ _sandbox_settings() {
   _SANDBOX_SCRATCH="$wt/.hgt/tmp"
   _SANDBOX_SETTINGS_FILE="$wt/.hgt/srt.json"
   mkdir -p "$_SANDBOX_SCRATCH/gh"
+  # SRT points the jail's TMPDIR at /tmp/claude (a default write path), but on Linux it binds
+  # only paths that exist host-side — absent, the bind is skipped, the jail's /tmp is read-only,
+  # and every mktemp dies. Pre-create it (#112).
+  mkdir -p /tmp/claude
 
   # Reads default to ALLOWED in SRT, so `denyRead: [$HOME]` is what restores ADR 0005's
   # deny-by-default. The worktree usually lives under $HOME, so it has to be re-allowed by name:

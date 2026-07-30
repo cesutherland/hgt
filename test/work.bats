@@ -538,6 +538,10 @@ bare_path() {
   ! grep -q '^srt-env TMPDIR=' "$SHIM_LOG"
   # gh gets a scratch config dir rather than reaching for the admin one the jail exists to hide
   grep -q "^srt-env GH_CONFIG_DIR=$TMP/wt/5-add-widget/.hgt/tmp/gh\$" "$SHIM_LOG"
+  # /tmp/claude is where SRT points the jail's TMPDIR, and it only binds paths that exist —
+  # hgt must pre-create it or in-jail mktemp dies (#112). Weak on a lived-in box (the dir
+  # persists), real on a fresh one — CI is always fresh.
+  [ -d /tmp/claude ]
 }
 
 @test "sandbox: HGT_SANDBOX_RO_BIND extends the readable paths (dogfooding seam)" {
