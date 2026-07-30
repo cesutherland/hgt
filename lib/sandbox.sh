@@ -156,9 +156,8 @@ _sandbox_settings() {
   _SANDBOX_SCRATCH="$wt/.hgt/tmp"
   _SANDBOX_SETTINGS_FILE="$wt/.hgt/srt.json"
   mkdir -p "$_SANDBOX_SCRATCH/gh"
-  # SRT points the jail's TMPDIR at /tmp/claude (a default write path), but on Linux it binds
-  # only paths that exist host-side — absent, the bind is skipped, the jail's /tmp is read-only,
-  # and every mktemp dies. Pre-create it (#112).
+  # SRT points jail TMPDIR at /tmp/claude but binds only paths that exist host-side — absent,
+  # in-jail mktemp dies on a read-only /tmp (#112).
   mkdir -p /tmp/claude
 
   # Reads default to ALLOWED in SRT, so `denyRead: [$HOME]` is what restores ADR 0005's
@@ -220,11 +219,10 @@ sandbox_argv() {
   for var in $_SANDBOX_ENV_PASS ${HGT_SANDBOX_SETENV:-}; do
     [ -n "${!var:-}" ] && HGT_SANDBOX_ARGV+=("$var=${!var}")
   done
-  # No TMPDIR: host-side srt binds bridge sockets under os.tmpdir(), and a worktree-deep path
-  # blows the 107-byte AF_UNIX limit (#112). The jail never saw it anyway — SRT points the jail's
-  # TMPDIR at its own writable /tmp/claude. GH_CONFIG_DIR gives gh a scratch config: the old tmpfs
-  # $HOME did that for free, and without one gh reaches for the real ~/.config/gh — the admin
-  # credential this jail exists to keep away from the agent.
+  # srt must see no TMPDIR: it binds bridge sockets under os.tmpdir(), and a worktree-deep
+  # path blows the 107-byte AF_UNIX limit (#112).
+  # Without GH_CONFIG_DIR gh reaches for the real ~/.config/gh — the admin credential this
+  # jail exists to keep away from the agent.
   HGT_SANDBOX_ARGV+=("GH_CONFIG_DIR=$_SANDBOX_SCRATCH/gh")
 
   # git config injected via the numbered GIT_CONFIG_* env (no ~/.gitconfig write needed). Always

@@ -533,14 +533,13 @@ bare_path() {
   ! grep -q '^srt-env AWS_SECRET_ACCESS_KEY=' "$SHIM_LOG"
   grep -q '^srt-env TERM=xterm$'      "$SHIM_LOG"   # allowlisted vars still pass
   grep -q '^srt-env NVM_DIR=/opt/nvm$' "$SHIM_LOG"  # the explicit opt-in seam works
-  # no TMPDIR handed to srt: it binds bridge sockets under os.tmpdir(), and a worktree-deep path
-  # blows the AF_UNIX name limit (#112) — SRT gives the jail /tmp/claude on its own
+  # srt must see no TMPDIR: bridge sockets bind under os.tmpdir(), and a worktree-deep path
+  # blows the AF_UNIX name limit (#112)
   ! grep -q '^srt-env TMPDIR=' "$SHIM_LOG"
   # gh gets a scratch config dir rather than reaching for the admin one the jail exists to hide
   grep -q "^srt-env GH_CONFIG_DIR=$TMP/wt/5-add-widget/.hgt/tmp/gh\$" "$SHIM_LOG"
-  # /tmp/claude is where SRT points the jail's TMPDIR, and it only binds paths that exist —
-  # hgt must pre-create it or in-jail mktemp dies (#112). Weak on a lived-in box (the dir
-  # persists), real on a fresh one — CI is always fresh.
+  # SRT binds only extant paths, so hgt pre-creates the jail's TMPDIR target (#112);
+  # vacuous on a lived-in box, real in CI (always fresh)
   [ -d /tmp/claude ]
 }
 
