@@ -118,6 +118,16 @@ them when the pin moves.
 The `env -i` mitigation below was confirmed the hard way: a `GH_TOKEN` exported in the calling
 shell does reach the jail without it, and SRT ships no default `unsetEnvVars`.
 
+## Amendment — what #112 found (0.0.67)
+
+- **Never set `TMPDIR` in the prefix that launches `srt`.** Host-side srt binds its socat
+  bridge sockets at `os.tmpdir()/claude-http-<16hex>.sock` (`linux-sandbox-utils.js:436`); a
+  worktree-deep `TMPDIR` pushes that path past the 107-byte `AF_UNIX` limit, the bind fails
+  silently, and srt dies with "Failed to create bridge sockets after 5 attempts". The setting
+  was dead weight regardless: SRT overrides the *jail's* `TMPDIR` to `/tmp/claude`
+  (default-writable; `CLAUDE_CODE_TMPDIR` is the seam to move it), so only host srt ever saw
+  hgt's value. Under `env -i` with no `TMPDIR`, `os.tmpdir()` falls back to `/tmp`.
+
 ## Consequences / residuals
 
 - **Pre-1.0 dependency.** `0.0.67`, "research preview," config format may evolve. Pin an exact
