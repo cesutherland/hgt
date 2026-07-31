@@ -534,13 +534,12 @@ bare_path() {
   grep -q '^srt-env TERM=xterm$'      "$SHIM_LOG"   # allowlisted vars still pass
   grep -q '^srt-env NVM_DIR=/opt/nvm$' "$SHIM_LOG"  # the explicit opt-in seam works
   # srt must see no TMPDIR: bridge sockets bind under os.tmpdir(), and a worktree-deep path
-  # blows the AF_UNIX name limit (#112)
+  # blows the AF_UNIX name limit
   ! grep -q '^srt-env TMPDIR=' "$SHIM_LOG"
+  # the jail's tmp rides CLAUDE_CODE_TMPDIR instead — per-worktree, not shared across jails
+  grep -q "^srt-env CLAUDE_CODE_TMPDIR=$TMP/wt/5-add-widget/.hgt/tmp\$" "$SHIM_LOG"
   # gh gets a scratch config dir rather than reaching for the admin one the jail exists to hide
   grep -q "^srt-env GH_CONFIG_DIR=$TMP/wt/5-add-widget/.hgt/tmp/gh\$" "$SHIM_LOG"
-  # SRT binds only extant paths, so hgt pre-creates the jail's TMPDIR target (#112);
-  # vacuous on a lived-in box, real in CI (always fresh)
-  [ -d /tmp/claude ]
 }
 
 @test "sandbox: HGT_SANDBOX_RO_BIND extends the readable paths (dogfooding seam)" {

@@ -120,11 +120,14 @@ shell does reach the jail without it, and SRT ships no default `unsetEnvVars`.
 
 ## Amendment — what #112 found (0.0.67)
 
-- **`/tmp/claude` is a default write path, but SRT never creates it on Linux.** Paths that
-  don't exist host-side are skipped, not bound (the `--bind-try` finding above, now on the
-  allow side), so on a fresh box the jail's `/tmp` is read-only, `TMPDIR` points at a
-  directory that isn't there, and every `mktemp` dies. hgt pre-creates `/tmp/claude` before
-  each launch.
+- **The jail's tmp rides `CLAUDE_CODE_TMPDIR`, never `TMPDIR`.** Host-side srt takes its
+  bridge-socket paths from `os.tmpdir()`, so a worktree-deep `TMPDIR` in the prefix blows the
+  107-byte AF_UNIX limit and kills the launch ("Failed to create bridge sockets after 5
+  attempts"). `CLAUDE_CODE_TMPDIR` is read in exactly one place — `generateProxyEnvVars`, to
+  set the *jail's* `TMPDIR` — so hgt points it at the per-worktree scratch dir. Couplings to
+  re-check on a pin bump: the var must stay out of srt's own socket paths, and its target must
+  exist and sit inside `allowWrite` (SRT's default `/tmp/claude` shows why: never created on
+  Linux, and extant-only binding silently skips it, leaving the jail's `/tmp` read-only).
 
 ## Consequences / residuals
 

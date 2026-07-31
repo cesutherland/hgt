@@ -163,9 +163,9 @@ hgt work <n>             # local execution: worktree + Claude session for issue 
     unlinked file descriptor, so its value never touches the argv, the command echo, the tmux
     pane, or `/proc/<pid>/cmdline`, and it dies with the process (no persistent on-disk secret).
     **Precondition:** a token usable in the jail wants egress locked down (issue #74).
-  - **Known friction:** jail writes are deny-by-default (worktree + git dir), but SRT points
-    the jail's `TMPDIR` at its own writable `/tmp/claude`, so `mktemp` and friends work; a
-    tool that hardcodes some other path will fail.
+  - **Known friction:** jail writes are deny-by-default (worktree + git dir). The jail's
+    `TMPDIR` is the worktree's own scratch dir (`.hgt/tmp`), so `mktemp` and friends work —
+    and each jail's tmp is private to it; a tool that hardcodes `/tmp` will fail.
 
 ## Tests & CI
 
