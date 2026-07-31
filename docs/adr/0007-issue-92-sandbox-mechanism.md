@@ -118,6 +118,17 @@ them when the pin moves.
 The `env -i` mitigation below was confirmed the hard way: a `GH_TOKEN` exported in the calling
 shell does reach the jail without it, and SRT ships no default `unsetEnvVars`.
 
+## Amendment — what #112 found (0.0.67)
+
+- **The jail's tmp rides `CLAUDE_CODE_TMPDIR`, never `TMPDIR`.** Host-side srt takes its
+  bridge-socket paths from `os.tmpdir()`, so a worktree-deep `TMPDIR` in the prefix blows the
+  107-byte AF_UNIX limit and kills the launch ("Failed to create bridge sockets after 5
+  attempts"). `CLAUDE_CODE_TMPDIR` is read in exactly one place — `generateProxyEnvVars`, to
+  set the *jail's* `TMPDIR` — so hgt points it at the per-worktree scratch dir. Couplings to
+  re-check on a pin bump: the var must stay out of srt's own socket paths, and its target must
+  exist and sit inside `allowWrite` (SRT's default `/tmp/claude` shows why: never created on
+  Linux, and extant-only binding silently skips it, leaving the jail's `/tmp` read-only).
+
 ## Consequences / residuals
 
 - **Pre-1.0 dependency.** `0.0.67`, "research preview," config format may evolve. Pin an exact
