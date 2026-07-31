@@ -11,6 +11,7 @@ We are currently in **Phase 0 — manual bootstrap**. `hgt` does not exist yet; 
 Applies to everything you generate — chat, commits, PRs, issues. Fewer words wins. Global "be concise" gets ignored, so these are shapes you can check, not vibes.
 
 - **Global:** don't spell it out unless asked. No preamble, no restating what's already visible (the diff, the file, the question), no "Summary/Overview" throat-clearing.
+- **Names:** committed text uses role terms (operator / reviewer / the human) — never personal names, usernames, or author credits. Repo slugs in URLs are the one exception.
 - **Chat:** lead with the answer. Group, don't enumerate. Levity and bluntness are fine.
 - **Commit subject:** `type(#n): imperative, lowercase, ≤70 chars`. The subject carries the change.
 - **Commit body:** why, not what; ≤3 lines. Omit it when the subject says enough.
