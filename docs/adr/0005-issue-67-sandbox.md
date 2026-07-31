@@ -21,13 +21,13 @@ Wrap **only the `claude` process** in a [bubblewrap](https://github.com/containe
 dicey" — keeps working. If claude is the only thing jailed, the tmux server and both panes
 live on the host unchanged: `tmux attach` is untouched, and the right-hand shell pane is a
 full host shell in the worktree — exactly the human intervention escape hatch we want
-*outside* the jail (it's Carl's shell, not the agent's). The agent (claude, left pane) is the
+*outside* the jail (it's the operator's shell, not the agent's). The agent (claude, left pane) is the
 only thing confined. A container would jail the whole session and force tmux-in-container
 ergonomics; bwrap sidesteps that entirely.
 
 **Why bwrap over the other candidates.** Lightest OS-level option, strong FS isolation, no
 daemon. A container (podman/docker) is stronger but heavier and drags in the tmux problem
-above; podman isn't installed and docker needs `carl` in the `docker` group (≈ root — a poor
+above; podman isn't installed and docker needs the operator's user in the `docker` group (≈ root — a poor
 trade for a *security* feature). A low-priv unix user shares the FS namespace (weaker). Claude
 Code's own permission mode is tool-level, not OS-level — a complement, not a substitute.
 
@@ -46,9 +46,9 @@ Code's own permission mode is tool-level, not OS-level — a complement, not a s
   anything not re-bound simply isn't in the jail: `~/.ssh`, `~/.config/gh` (admin `gh` auth),
   `~/.npmrc`, `~/.gnupg`, sibling repos, arbitrary FS.
 - **env:** `--clearenv` then a curated allowlist (`HOME`, `PATH`, `TERM`, `LANG`/`LC_*`), so
-  secrets exported in Carl's shell (`GH_TOKEN`, cloud creds…) don't leak in via the
+  secrets exported in the operator's shell (`GH_TOKEN`, cloud creds…) don't leak in via the
   environment. gpg-signing is forced off inside the jail (`commit.gpgsign=false`) — the agent
-  has no `~/.gnupg`, so it can't sign as Carl, and its commits are unsigned by design; the
+  has no `~/.gnupg`, so it can't sign as the operator, and its commits are unsigned by design; the
   human's own commits (review, merge) stay signed on the host.
 
 This satisfies the acceptance criteria structurally: the agent can't read `~/.ssh` or anything
@@ -85,11 +85,11 @@ The preflight prints these commands verbatim when the jail can't start.
 - **Live validation is deferred to the profile install.** bwrap can't create a userns on this
   box until the AppArmor profile lands (root, password-gated), so this slice is validated by
   construction + shim conformance tests (the argv hgt emits), not by running claude jailed.
-  Carl validates AC #1/#2 live the first time he installs the profile and runs `hgt work`.
+  The operator validates AC #1/#2 live the first time they install the profile and run `hgt work`.
 - **`~/.claude` rw is an escape vector, not just a confidentiality leak (#73, next slice).**
   Claude Code executes hooks/settings from user-level `~/.claude/settings.json`. Binding that
   dir **writable** lets a prompt-injected agent write a malicious hook that then runs
-  **unsandboxed on the host** the next time Carl launches Claude — a write-back that round-trips
+  **unsandboxed on the host** the next time the operator launches Claude — a write-back that round-trips
   straight out of the jail with full privileges. (The confidentiality angle — global MCP config,
   cross-project history — is the lesser half.) Fix: a dedicated minimal config home
   (`CLAUDE_CONFIG_DIR`) that carries only the credential and no host settings/hooks. Bumped from

@@ -33,7 +33,7 @@
 # no human in it — ADR 0008 walks it. Keep the scope `public_repo` only.
 #
 # v0 reads the LIVE issue body, not a frozen snapshot. That is a deliberate, temporary
-# choice (#51): safe only because the executor is powerless and Carl solely curates issues,
+# choice (#51): safe only because the executor is powerless and the operator solely curates issues,
 # so the TOCTOU / invisible-unicode surface is self-inflicted. The `prompt` frames the body
 # as task-data, but that framing is NOT a real injection defense — the real fix is the
 # normalize-then-snapshot fast-follow (#39/#40/#41) that flips this trigger to the snapshot.

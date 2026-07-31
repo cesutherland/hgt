@@ -64,7 +64,7 @@ single architectural difference deletes the entire enforcement layer PR #90 was 
 | **Build here** (PR #90) | bwrap `--share-net` + own proxy + nftables/cgroup | Most code, most host setup, and the only option with a silent fail-open mode (see below) |
 | **DIY-lite** | own bwrap `--unshare-net` + `socat` → tinyproxy/squid | SRT's architecture, our maintenance. The documented fallback if SRT's pre-1.0 config churns |
 | **Firejail** | own netns + `--netfilter=<iptables-save>` | setuid-root binary with a CVE history; `--net` needs veth/root; filtering is IP-based, and the Anthropic API and GitHub sit behind rotating CDN addresses |
-| **Anthropic devcontainer** + `init-firewall.sh` | Docker, default-deny iptables + ipset | Needs Docker — ADR 0005 already rejected putting `carl` in the `docker` group (≈ root) as a poor trade for a security feature — and jails the whole session, breaking `tmux attach` into a host pane beside the agent |
+| **Anthropic devcontainer** + `init-firewall.sh` | Docker, default-deny iptables + ipset | Needs Docker — ADR 0005 already rejected putting the operator's user in the `docker` group (≈ root) as a poor trade for a security feature — and jails the whole session, breaking `tmux attach` into a host pane beside the agent |
 | **Third-party agent sandboxes** (agentbox, ClaudeBox, Docker Sandboxes, iron-proxy) | container-shaped | Same objections as the devcontainer. `iron-proxy` is a useful proxy *component*, not a boundary |
 | **systemd `IPAddressDeny=any`** | per-unit eBPF | Not a substitute: IP-based, same CDN problem. Only a belt under a proxy |
 | **Claude Code's built-in `/sandbox`** | Bash subprocesses only | MCP servers, hooks, and file tools run unconstrained on the host. A near-free second layer, not the boundary |
