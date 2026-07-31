@@ -155,7 +155,7 @@ _sandbox_settings() {
 
   _SANDBOX_SCRATCH="$wt/.hgt/tmp"
   _SANDBOX_SETTINGS_FILE="$wt/.hgt/srt.json"
-  mkdir -p "$_SANDBOX_SCRATCH/gh"
+  mkdir -p "$_SANDBOX_SCRATCH" "$wt/.hgt/gh"
 
   # Reads default to ALLOWED in SRT, so `denyRead: [$HOME]` is what restores ADR 0005's
   # deny-by-default. The worktree usually lives under $HOME, so it has to be re-allowed by name:
@@ -221,8 +221,9 @@ sandbox_argv() {
   # CLAUDE_CODE_TMPDIR moves only the jail's TMPDIR — into the scratch dir, already writable
   # and private to this worktree rather than shared with every other jail on the box.
   # Without GH_CONFIG_DIR gh reaches for the real ~/.config/gh — the admin credential this
-  # jail exists to keep away from the agent.
-  HGT_SANDBOX_ARGV+=("CLAUDE_CODE_TMPDIR=$_SANDBOX_SCRATCH" "GH_CONFIG_DIR=$_SANDBOX_SCRATCH/gh")
+  # jail exists to keep away from the agent. A sibling of the scratch, not inside it: a
+  # tmp-cleaner in the jail must not clobber gh config mid-session.
+  HGT_SANDBOX_ARGV+=("CLAUDE_CODE_TMPDIR=$_SANDBOX_SCRATCH" "GH_CONFIG_DIR=$wt/.hgt/gh")
 
   # git config injected via the numbered GIT_CONFIG_* env (no ~/.gitconfig write needed). Always
   # force gpg-signing off — the jail has no ~/.gnupg, so the agent can't sign as the human. Always

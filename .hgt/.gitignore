@@ -4,3 +4,4 @@
 # `hgt work rm` refuse to tear it down.
 srt.json
 tmp/
+gh/
