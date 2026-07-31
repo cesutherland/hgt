@@ -16,7 +16,7 @@
 ## Decision
 
 The executor's GitHub credential is a **classic PAT on a dedicated machine user** —
-`hgtbot`, a write-access collaborator that is neither `github-actions` nor Carl — stored as
+`hgtbot`, a write-access collaborator that is neither `github-actions` nor the operator — stored as
 `secrets.HGT_MACHINE_USER_TOKEN` and wired in `.github/workflows/hgt-execute.yml` two places:
 
 - `github_token:` on the action step, and
@@ -84,7 +84,7 @@ runner holding nothing worth stealing.
 | **`GITHUB_TOKEN` + a dispatch/nudge to re-trigger CI** (#58's interim fix) | Treats the symptom. Still needs the toggle ON, still leaves bot-authored PRs |
 | **Fine-grained PAT** (the original plan) | Can't target a repo the account doesn't own. Not an option, not a preference |
 | **GitHub App** | The right endgame — short-lived install tokens, no resident secret (#56/#68). More setup than this slice, and the PAT is a strictly smaller step toward it (both replace the `github-actions` identity) |
-| **Carl's own token** | The author of a PR cannot review it. Destroys the human gate outright (#55/#60/#68) |
+| **The operator's own token** | The author of a PR cannot review it. Destroys the human gate outright (#55/#60/#68) |
 
 ## Consequences / residuals
 
@@ -120,7 +120,7 @@ runner holding nothing worth stealing.
    PR: `gh api -X PUT repos/cesutherland/hgt/actions/permissions/workflow -F
    default_workflow_permissions=read -F can_approve_pull_request_reviews=false`.
 4. Label a `ready` issue and check the resulting PR: authored by the machine user, `ci / test`
-   running on it unprompted, Carl's approval still the only one that counts.
+   running on it unprompted, the operator's approval still the only one that counts.
 
 `forge_print_ruleset` (what `hgt init` prints) carries steps 1–3 in this order, after the
 ruleset itself — machine user and secret before the toggle, for the reason in step 3.
