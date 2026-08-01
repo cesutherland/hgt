@@ -15,6 +15,12 @@
 # sourcing an unlinked fd — its value still never touches the argv, the pane, or /proc/<pid>/cmdline.
 # That "scoped" is an assumption, not an enforced property, so _sandbox_check_token_scope probes
 # the token's own scopes before the jail launches and warns or refuses (#98).
+#
+# Commit authorship (#102): auth ≠ authorship — the token above is who *pushes*; who git says
+# *committed* is separate and, by default, still comes from the host's readable ~/.gitconfig. Set
+# HGT_SANDBOX_GIT_AUTHOR_NAME / HGT_SANDBOX_GIT_AUTHOR_EMAIL and the jail's commits (author +
+# committer) carry that identity instead — GIT_AUTHOR_*/GIT_COMMITTER_* env, per-process, so the
+# host shell's own git identity is untouched.
 
 # Pinned exactly: SRT is pre-1.0, so treat a bump as a change that re-runs the conformance suite.
 # HGT_SANDBOX_SRT_VERSION overrides; empty skips the check.
@@ -224,6 +230,25 @@ sandbox_argv() {
   # jail exists to keep away from the agent. A sibling of the scratch, not inside it: a
   # tmp-cleaner in the jail must not clobber gh config mid-session.
   HGT_SANDBOX_ARGV+=("CLAUDE_CODE_TMPDIR=$_SANDBOX_SCRATCH" "GH_CONFIG_DIR=$wt/.hgt/gh")
+
+  # Commit authorship (#102): auth ≠ authorship. #81 sets who *pushes* (the PAT); this is who
+  # git says *committed* — GitHub attributes a commit by GIT_AUTHOR/COMMITTER *email*, not the
+  # pusher, so without this the jail inherits the host's ~/.gitconfig and commits land as the
+  # human even when pushed via the bot token. Env vars, not GIT_CONFIG_*: they're the identity
+  # override git itself defines, and they apply per-process to the jail only — the host shell's
+  # own git identity is untouched (two-identities-on-one-host). Config/env-driven so a PAT->App
+  # migration is a value swap here, not a code change: name+email unset leaves the jail on its
+  # current fallback (the host's readable ~/.gitconfig).
+  if [ -n "${HGT_SANDBOX_GIT_AUTHOR_NAME:-}" ] || [ -n "${HGT_SANDBOX_GIT_AUTHOR_EMAIL:-}" ]; then
+    [ -n "${HGT_SANDBOX_GIT_AUTHOR_NAME:-}" ] && [ -n "${HGT_SANDBOX_GIT_AUTHOR_EMAIL:-}" ] \
+      || die "sandbox: set both HGT_SANDBOX_GIT_AUTHOR_NAME and HGT_SANDBOX_GIT_AUTHOR_EMAIL, or neither (partial identity would still leak the host's git config for the missing half)."
+    HGT_SANDBOX_ARGV+=(
+      "GIT_AUTHOR_NAME=$HGT_SANDBOX_GIT_AUTHOR_NAME"
+      "GIT_AUTHOR_EMAIL=$HGT_SANDBOX_GIT_AUTHOR_EMAIL"
+      "GIT_COMMITTER_NAME=$HGT_SANDBOX_GIT_AUTHOR_NAME"
+      "GIT_COMMITTER_EMAIL=$HGT_SANDBOX_GIT_AUTHOR_EMAIL"
+    )
+  fi
 
   # git config injected via the numbered GIT_CONFIG_* env (no ~/.gitconfig write needed). Always
   # force gpg-signing off — the jail has no ~/.gnupg, so the agent can't sign as the human. Always

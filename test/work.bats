@@ -797,3 +797,52 @@ bare_path() {
   [[ "$output" == *"couldn't probe"* ]]
   grep -q '^srt --settings ' "$SHIM_LOG"  # the claude jail launches despite the probe failure
 }
+
+# --- commit authorship (#102) -----------------------------------------------------------------
+# #81 wired who *pushes* (the PAT); this is who git says *committed*. Unset, the jail falls back
+# to its pre-existing behavior — the host's readable ~/.gitconfig — so commits still carry the
+# human's name even over a bot-pushed branch, forcing a self-approval bypass. The seam is
+# config/env-driven (HGT_SANDBOX_GIT_AUTHOR_NAME/EMAIL), not hardcoded to any one bot account.
+
+@test "authorship: unset -> no GIT_AUTHOR/COMMITTER env, jail falls back to host ~/.gitconfig (#102)" {
+  work_env
+  run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  ! grep -q '^srt-env GIT_AUTHOR_NAME='    "$SHIM_LOG"
+  ! grep -q '^srt-env GIT_AUTHOR_EMAIL='   "$SHIM_LOG"
+  ! grep -q '^srt-env GIT_COMMITTER_NAME=' "$SHIM_LOG"
+  ! grep -q '^srt-env GIT_COMMITTER_EMAIL=' "$SHIM_LOG"
+}
+
+@test "authorship: name+email set -> the jail's commits (author+committer) carry the bot identity (#102)" {
+  work_env
+  run env HGT_SANDBOX_GIT_AUTHOR_NAME=hgtbot \
+          HGT_SANDBOX_GIT_AUTHOR_EMAIL='123+hgtbot@users.noreply.github.com' \
+          "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  grep -q '^srt-env GIT_AUTHOR_NAME=hgtbot$'                                        "$SHIM_LOG"
+  grep -q '^srt-env GIT_AUTHOR_EMAIL=123+hgtbot@users.noreply.github.com$'          "$SHIM_LOG"
+  grep -q '^srt-env GIT_COMMITTER_NAME=hgtbot$'                                     "$SHIM_LOG"
+  grep -q '^srt-env GIT_COMMITTER_EMAIL=123+hgtbot@users.noreply.github.com$'       "$SHIM_LOG"
+}
+
+@test "authorship: setting only one of name/email fails closed (#102)" {
+  work_env
+  run env HGT_SANDBOX_GIT_AUTHOR_NAME=hgtbot "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"HGT_SANDBOX_GIT_AUTHOR_NAME"* ]]
+  [[ "$output" == *"HGT_SANDBOX_GIT_AUTHOR_EMAIL"* ]]
+  ! grep -q '^claude ' "$SHIM_LOG"  # fail closed before the jail ever launches
+}
+
+@test "authorship: the bot identity is jail env only — the host shell's own git identity is untouched (#102)" {
+  work_env
+  # HGT_SANDBOX_ENV_PASS/host env is asserted elsewhere; here the point is narrower: the bot
+  # identity rides the jail's env array (env -i ... srt), never mutates $HOME/.gitconfig, so a
+  # concurrent host-side `git commit` in the same session keeps the human's own identity.
+  run env HGT_SANDBOX_GIT_AUTHOR_NAME=hgtbot \
+          HGT_SANDBOX_GIT_AUTHOR_EMAIL='123+hgtbot@users.noreply.github.com' \
+          "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  ! grep -q 'hgtbot' "$HOME/.gitconfig" 2>/dev/null
+}

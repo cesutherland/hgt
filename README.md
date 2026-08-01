@@ -163,6 +163,15 @@ hgt work <n>             # local execution: worktree + Claude session for issue 
     unlinked file descriptor, so its value never touches the argv, the command echo, the tmux
     pane, or `/proc/<pid>/cmdline`, and it dies with the process (no persistent on-disk secret).
     **Precondition:** a token usable in the jail wants egress locked down (issue #74).
+  - **Commit authorship (issue #102):** the token above is who *pushes* — who git says
+    *committed* is separate and, unset, still comes from the host's readable `~/.gitconfig` (so
+    commits carry the human's name even when pushed via the bot token, forcing a self-approval
+    bypass). Set `HGT_SANDBOX_GIT_AUTHOR_NAME` and `HGT_SANDBOX_GIT_AUTHOR_EMAIL` (both, or
+    neither) and the jail's commits — author and committer — carry that identity instead, via
+    `GIT_AUTHOR_*`/`GIT_COMMITTER_*` env set only for the jailed process; the host shell's own
+    git identity is untouched. GitHub attributes by *email*, so use the bot's own
+    `users.noreply.github.com` address (e.g. `hgtbot` / `<user-id>+hgtbot@users.noreply.github.com`
+    today; swapping to a GitHub App later is a value change here, not a rewrite).
   - **Known friction:** jail writes are deny-by-default (allowed: worktree + git dir). The jail's
     `TMPDIR` is the worktree's own scratch dir (`.hgt/tmp`), so `mktemp` and friends work —
     and each jail's tmp is private to it; a tool that hardcodes `/tmp` will fail.
