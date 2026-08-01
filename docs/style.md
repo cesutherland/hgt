@@ -4,6 +4,26 @@ The codebase runs a deliberate heavy-narrative style on gnarly bash — `set -e`
 traps, glob edges, tmux ordering. It earns its keep there. This guide is the
 line between that and noise, so PRs stop re-litigating density by taste (#36).
 
+## Proportionality: prose scales with the diff, not the investigation
+
+The investigation behind a one-line fix can take an hour; the writeup doesn't
+inherit that length. If an explanation is longer than the diff it justifies,
+cut it or move it to the issue — the issue is where the investigation lives.
+
+Inline comments cap at two lines. Spend them on the constraint that bites —
+never on the old code, and never arguing that the new code is right. `git
+diff` already shows both.
+
+## Classification gates documentation, asked first
+
+Before writing anything, classify the change:
+
+- **Plain bug** — a commit subject + a regression test. No ADR.
+- **Decision or coupling** — an ADR, written or amended.
+
+Decide this before drafting the PR body. It's what tells you whether there's
+an ADR to write at all.
+
 ## Comment the why, not the what
 
 Mechanism is already in the code. A comment restating it is dead weight the
@@ -55,6 +75,23 @@ pointer, not a re-argued case:
 # good — one line, points at the source of truth
 # Sandbox mechanism: see ADR 0007.
 ```
+
+## ADR amendments document what remains coupled, never what was removed
+
+An amendment isn't a changelog of what got deleted — `git log` already has
+that. It exists so the next pin bump knows what to re-check. ADR 0007's
+`#112` amendment is the model: it says nothing about `TMPDIR` being dropped
+from the sandbox prefix, only that the jail's tmp rides
+`CLAUDE_CODE_TMPDIR` and that its target must exist inside `allowWrite`.
+That's the coupling that can still break; the removal can't.
+
+## Issue refs in code point forward only
+
+A code comment cites an issue for open work only — residual scope, a known
+gap, a follow-up. Never the issue a change fixed; `type(#n)` commit subjects
+and `git blame` already carry that traceability. If a comment reads as
+confusing once the ref is deleted, the constraint isn't standing on its own
+yet — rewrite it so it does.
 
 ## Non-goals
 
