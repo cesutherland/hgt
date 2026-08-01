@@ -15,6 +15,13 @@
 # sourcing an unlinked fd — its value still never touches the argv, the pane, or /proc/<pid>/cmdline.
 # That "scoped" is an assumption, not an enforced property, so _sandbox_check_token_scope probes
 # the token's own scopes before the jail launches and warns or refuses (#98).
+#
+# Auth != authorship (#102): a token buys push access, not commit attribution — without help git
+# falls through to the read-allowed host ~/.gitconfig and every sandboxed commit lands as the
+# operator. _sandbox_derive_identity derives GIT_AUTHOR_*/GIT_COMMITTER_* FROM the same token so
+# the two can't drift, stamped into the jail as env (never a ~/.gitconfig write). Overridable
+# verbatim via HGT_SANDBOX_GIT_AUTHOR/HGT_SANDBOX_GIT_COMMITTER; derivation failure dies rather
+# than silently falling back to the host identity, since a silent fallback is this bug again.
 
 # Pinned exactly: SRT is pre-1.0, so treat a bump as a change that re-runs the conformance suite.
 # HGT_SANDBOX_SRT_VERSION overrides; empty skips the check.
@@ -201,6 +208,84 @@ _sandbox_settings() {
   } >"$_SANDBOX_SETTINGS_FILE"
 }
 
+# _sandbox_parse_identity SRC VARNAME NAMEVAR EMAILVAR — split an override's "Name <email>" (the
+# same shape `git commit --author=` takes) into NAMEVAR/EMAILVAR, dying with VARNAME (the env var
+# the operator actually set) on a malformed value rather than a mysterious downstream git error.
+_sandbox_parse_identity() {
+  local src="$1" varname="$2" namevar="$3" emailvar="$4" name email
+  case "$src" in
+    *' <'*'>') ;;
+    *) die "sandbox: $varname must look like 'Name <email>', got: $src" ;;
+  esac
+  email="${src##*<}"; email="${email%>}"
+  name="${src%<*}"; name="${name% }"
+  [ -n "$name" ] && [ -n "$email" ] || die "sandbox: $varname must look like 'Name <email>', got: $src"
+  printf -v "$namevar" '%s' "$name"
+  printf -v "$emailvar" '%s' "$email"
+}
+
+# _sandbox_derive_identity — resolve the git author/committer identity for the jail (#102). Sets
+# _SANDBOX_GIT_AUTHOR_NAME/_EMAIL and _SANDBOX_GIT_COMMITTER_NAME/_EMAIL, all empty when there is
+# nothing to stamp (the credential-less no-op — the read-allowed host ~/.gitconfig stands, same as
+# every other unauthenticated jail property). This is the "mint step" of the credential seam: it
+# owns the one identity-resolving API call, same as the future GitHub App provider will own its
+# own (GET /app + GET /users/<slug>[bot]) — sandbox_argv itself never calls out, it only stamps
+# whatever bundle this hands back, so swapping providers never touches it.
+_sandbox_derive_identity() {
+  _SANDBOX_GIT_AUTHOR_NAME=""; _SANDBOX_GIT_AUTHOR_EMAIL=""
+  _SANDBOX_GIT_COMMITTER_NAME=""; _SANDBOX_GIT_COMMITTER_EMAIL=""
+
+  # Override: verbatim, no API call, independent of whether a token is even set — covers offline
+  # and oddball identities. Author-only or committer-only mirrors git's own default (the unset
+  # half falls back to the set one).
+  if [ -n "${HGT_SANDBOX_GIT_AUTHOR:-}" ] || [ -n "${HGT_SANDBOX_GIT_COMMITTER:-}" ]; then
+    [ -n "${HGT_SANDBOX_GIT_AUTHOR:-}" ] && _sandbox_parse_identity "$HGT_SANDBOX_GIT_AUTHOR" \
+      HGT_SANDBOX_GIT_AUTHOR _SANDBOX_GIT_AUTHOR_NAME _SANDBOX_GIT_AUTHOR_EMAIL
+    [ -n "${HGT_SANDBOX_GIT_COMMITTER:-}" ] && _sandbox_parse_identity "$HGT_SANDBOX_GIT_COMMITTER" \
+      HGT_SANDBOX_GIT_COMMITTER _SANDBOX_GIT_COMMITTER_NAME _SANDBOX_GIT_COMMITTER_EMAIL
+    if [ -z "${HGT_SANDBOX_GIT_COMMITTER:-}" ]; then
+      _SANDBOX_GIT_COMMITTER_NAME=$_SANDBOX_GIT_AUTHOR_NAME
+      _SANDBOX_GIT_COMMITTER_EMAIL=$_SANDBOX_GIT_AUTHOR_EMAIL
+    elif [ -z "${HGT_SANDBOX_GIT_AUTHOR:-}" ]; then
+      _SANDBOX_GIT_AUTHOR_NAME=$_SANDBOX_GIT_COMMITTER_NAME
+      _SANDBOX_GIT_AUTHOR_EMAIL=$_SANDBOX_GIT_COMMITTER_EMAIL
+    fi
+    return 0
+  fi
+
+  # Credential-less launch: no bot exists to author as, and commits dead-end locally anyway
+  # (#81) — derive nothing.
+  [ -n "${HGT_SANDBOX_GITHUB_TOKEN:-}" ] || return 0
+
+  # App installation tokens (`ghs_`) can't answer GET /user — no user exists behind one. Sniffing
+  # the prefix here, before spending a call, is what lets the eventual App provider tell "this is
+  # my token, derive elsewhere" apart from "this PAT is simply bad" (#56/#68 wire that path; today
+  # an unrecognized prefix has nowhere else to go, so it fails loud rather than guessing).
+  case "$HGT_SANDBOX_GITHUB_TOKEN" in
+    ghp_* | github_pat_* | gho_* | ghu_*) ;;
+    *) die "sandbox: HGT_SANDBOX_GITHUB_TOKEN doesn't look like a user-shaped PAT (expected ghp_/github_pat_/gho_/ghu_) — can't derive commit authorship from it. Set HGT_SANDBOX_GIT_AUTHOR/HGT_SANDBOX_GIT_COMMITTER to override, or use a PAT." ;;
+  esac
+  command -v gh >/dev/null 2>&1 \
+    || die "sandbox: gh not on PATH — can't derive commit authorship for HGT_SANDBOX_GITHUB_TOKEN. Install gh, or set HGT_SANDBOX_GIT_AUTHOR/HGT_SANDBOX_GIT_COMMITTER to override."
+
+  local out id login
+  local -a lines
+  out=$(GH_TOKEN="$HGT_SANDBOX_GITHUB_TOKEN" GITHUB_TOKEN="$HGT_SANDBOX_GITHUB_TOKEN" \
+    gh api user --jq '.id,.login' 2>/dev/null) \
+    || die "sandbox: couldn't resolve the identity behind HGT_SANDBOX_GITHUB_TOKEN (gh api user failed) — refusing to fall back to the host git identity. Check the token, or set HGT_SANDBOX_GIT_AUTHOR/HGT_SANDBOX_GIT_COMMITTER to override."
+  # readarray, not `read`: unlike `read`, it can't itself return non-zero on a short/malformed
+  # response, so a bad payload reaches the validation below instead of tripping `set -e` first.
+  readarray -t lines <<<"$out"
+  id="${lines[0]:-}"; login="${lines[1]:-}"
+  case "$id" in '' | *[!0-9]*) die "sandbox: unexpected response deriving identity for HGT_SANDBOX_GITHUB_TOKEN — refusing to fall back to the host git identity. Set HGT_SANDBOX_GIT_AUTHOR/HGT_SANDBOX_GIT_COMMITTER to override." ;; esac
+  [ -n "$login" ] || die "sandbox: unexpected response deriving identity for HGT_SANDBOX_GITHUB_TOKEN — refusing to fall back to the host git identity. Set HGT_SANDBOX_GIT_AUTHOR/HGT_SANDBOX_GIT_COMMITTER to override."
+
+  _SANDBOX_GIT_AUTHOR_NAME=$login
+  _SANDBOX_GIT_AUTHOR_EMAIL="${id}+${login}@users.noreply.github.com"
+  _SANDBOX_GIT_COMMITTER_NAME=$_SANDBOX_GIT_AUTHOR_NAME
+  _SANDBOX_GIT_COMMITTER_EMAIL=$_SANDBOX_GIT_AUTHOR_EMAIL
+}
+
 # sandbox_argv WT — populate the global array HGT_SANDBOX_ARGV with the prefix that jails a process
 # to worktree WT. Caller appends the real command (`claude -n ...`); the prefix ends with `--` so
 # srt can't mistake claude's flags for its own. A global array (not stdout) so both consumers get a
@@ -209,6 +294,7 @@ _sandbox_settings() {
 sandbox_argv() {
   local wt="$1" var i
   _sandbox_settings "$wt"
+  _sandbox_derive_identity   # #102: resolve the bundle BEFORE building the argv — stamping it is dumb
 
   # `env -i` is our --clearenv. An approximation, not an equivalent: the pane's dash re-adds PWD,
   # and SRT overlays its proxy variables.
@@ -224,6 +310,14 @@ sandbox_argv() {
   # jail exists to keep away from the agent. A sibling of the scratch, not inside it: a
   # tmp-cleaner in the jail must not clobber gh config mid-session.
   HGT_SANDBOX_ARGV+=("CLAUDE_CODE_TMPDIR=$_SANDBOX_SCRATCH" "GH_CONFIG_DIR=$wt/.hgt/gh")
+  # Commit authorship (#102): git reads these directly, no ~/.gitconfig write needed — same
+  # mechanism as the GIT_CONFIG_* below, just the env vars git already defines for this. Empty
+  # (the credential-less no-op) leaves them unset, so git falls through to the read-allowed host
+  # ~/.gitconfig exactly as it did before this feature existed.
+  [ -n "$_SANDBOX_GIT_AUTHOR_NAME" ]     && HGT_SANDBOX_ARGV+=("GIT_AUTHOR_NAME=$_SANDBOX_GIT_AUTHOR_NAME")
+  [ -n "$_SANDBOX_GIT_AUTHOR_EMAIL" ]    && HGT_SANDBOX_ARGV+=("GIT_AUTHOR_EMAIL=$_SANDBOX_GIT_AUTHOR_EMAIL")
+  [ -n "$_SANDBOX_GIT_COMMITTER_NAME" ]  && HGT_SANDBOX_ARGV+=("GIT_COMMITTER_NAME=$_SANDBOX_GIT_COMMITTER_NAME")
+  [ -n "$_SANDBOX_GIT_COMMITTER_EMAIL" ] && HGT_SANDBOX_ARGV+=("GIT_COMMITTER_EMAIL=$_SANDBOX_GIT_COMMITTER_EMAIL")
 
   # git config injected via the numbered GIT_CONFIG_* env (no ~/.gitconfig write needed). Always
   # force gpg-signing off — the jail has no ~/.gnupg, so the agent can't sign as the human. Always

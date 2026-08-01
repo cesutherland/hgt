@@ -186,6 +186,11 @@ hgt work <n>             # local execution: worktree + Claude session for issue 
   `X-OAuth-Scopes` before launch and warns (fail-closed on clearly-admin scopes) if it looks
   broader than push/PR needs (#98) — an admin/broad token would otherwise hand the jailed agent
   the power to bypass the human-merge gate this section exists to hold.
+- **commit authorship (#102):** derived FROM that same token, not configured — one `GET /user`
+  stamps `GIT_AUTHOR_NAME/EMAIL` + `GIT_COMMITTER_NAME/EMAIL` as jail env (the login + noreply
+  address), so auth and authorship can't drift and the operator reviews sandboxed PRs as a clean
+  third party. `HGT_SANDBOX_GIT_AUTHOR`/`HGT_SANDBOX_GIT_COMMITTER` override verbatim; a token
+  that fails to derive dies rather than silently falling back to the host identity.
 - respect branch stacking: default `--worktree` bases off `origin/HEAD`, which breaks
   stacks — use `worktree.baseRef: "head"` or fall back to manual
   `git worktree add -b <branch> <base>` for stacked work.
