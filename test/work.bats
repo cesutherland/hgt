@@ -797,3 +797,86 @@ bare_path() {
   [[ "$output" == *"couldn't probe"* ]]
   grep -q '^srt --settings ' "$SHIM_LOG"  # the claude jail launches despite the probe failure
 }
+
+# --- commit authorship (#102) ------------------------------------------------------------------
+# Auth != authorship: #81 wired the pusher (the scoped token); this derives the git author FROM
+# that same token so the two can't drift. One GET /user, name + noreply email stamped as jail env
+# (never a ~/.gitconfig write) — so the operator can approve the resulting PR as a clean
+# third-party reviewer instead of rubber-stamping their own commit.
+
+@test "publish: a scoped token derives commit authorship from GET /user (#102)" {
+  work_env
+  export HGT_SANDBOX_CRED_DIR="$TMP/cred"
+  run env HGT_SANDBOX_GITHUB_TOKEN=ghp_SEKRET SHIM_GH_IDENTITY_ID=98765432 SHIM_GH_IDENTITY_LOGIN=hgtbot \
+    "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  grep -q "^gh api user --jq .id,.login\$" "$SHIM_LOG"        # the derivation call shape
+  grep -q '^srt-env GIT_AUTHOR_NAME=hgtbot$'                                                "$SHIM_LOG"
+  grep -q '^srt-env GIT_AUTHOR_EMAIL=98765432+hgtbot@users\.noreply\.github\.com$'          "$SHIM_LOG"
+  grep -q '^srt-env GIT_COMMITTER_NAME=hgtbot$'                                             "$SHIM_LOG"
+  grep -q '^srt-env GIT_COMMITTER_EMAIL=98765432+hgtbot@users\.noreply\.github\.com$'       "$SHIM_LOG"
+}
+
+@test "publish: credential-less launch stamps no git identity, host identity stands (#102)" {
+  work_env
+  run "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  ! grep -q 'GIT_AUTHOR_NAME'    "$SHIM_LOG"   # nothing stamped...
+  ! grep -q 'GIT_COMMITTER_NAME' "$SHIM_LOG"
+  ! grep -q -- '--jq .id,.login' "$SHIM_LOG"   # ...and no API call made to derive it
+  grep -q '^srt --settings ' "$SHIM_LOG"       # the (token-less) jail still launches
+}
+
+@test "publish: HGT_SANDBOX_GIT_AUTHOR/COMMITTER override verbatim, no API call (#102)" {
+  work_env
+  run env HGT_SANDBOX_GIT_AUTHOR='Bot One <bot-one@example.com>' \
+          HGT_SANDBOX_GIT_COMMITTER='Bot Two <bot-two@example.com>' \
+    "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  grep -q '^srt-env GIT_AUTHOR_NAME=Bot One$'             "$SHIM_LOG"
+  grep -q '^srt-env GIT_AUTHOR_EMAIL=bot-one@example\.com$'    "$SHIM_LOG"
+  grep -q '^srt-env GIT_COMMITTER_NAME=Bot Two$'          "$SHIM_LOG"
+  grep -q '^srt-env GIT_COMMITTER_EMAIL=bot-two@example\.com$'  "$SHIM_LOG"
+  ! grep -q -- '--jq .id,.login' "$SHIM_LOG"    # override is verbatim — no derivation call at all
+}
+
+@test "publish: an author-only override mirrors to committer (#102)" {
+  work_env
+  run env HGT_SANDBOX_GIT_AUTHOR='Solo Bot <solo@example.com>' "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -eq 0 ]
+  grep -q '^srt-env GIT_AUTHOR_NAME=Solo Bot$'              "$SHIM_LOG"
+  grep -q '^srt-env GIT_COMMITTER_NAME=Solo Bot$'           "$SHIM_LOG"
+  grep -q '^srt-env GIT_COMMITTER_EMAIL=solo@example\.com$' "$SHIM_LOG"
+}
+
+@test "publish: identity derivation failure dies loud, never falls back to the host identity (#102)" {
+  work_env
+  export HGT_SANDBOX_CRED_DIR="$TMP/cred"
+  run env HGT_SANDBOX_GITHUB_TOKEN=ghp_SEKRET SHIM_GH_IDENTITY_EXIT=1 "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"couldn't resolve the identity"* ]]
+  [[ "$output" == *"HGT_SANDBOX_GIT_AUTHOR"* ]]   # names the escape hatch
+  ! grep -q '^srt --settings ' "$SHIM_LOG"        # refused before the jail ever launches
+  ! grep -q '^claude '         "$SHIM_LOG"
+}
+
+@test "publish: an App-shaped token prefix fails loud with no derivation call at all (#102)" {
+  work_env
+  export HGT_SANDBOX_CRED_DIR="$TMP/cred"
+  # ghs_ (an installation token) can't answer GET /user — no user exists behind one. The prefix
+  # sniff must catch this BEFORE spending a call, not after a confusing 4xx.
+  run env HGT_SANDBOX_GITHUB_TOKEN=ghs_INSTALLATION "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"doesn't look like a user-shaped PAT"* ]]
+  ! grep -q -- '--jq .id,.login' "$SHIM_LOG"
+  ! grep -q '^srt --settings ' "$SHIM_LOG"
+}
+
+@test "publish: a malformed override dies loud, naming the offending var (#102)" {
+  work_env
+  run env HGT_SANDBOX_GIT_AUTHOR='not-an-identity' "$HGT_BIN" work 5 --no-tmux
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"HGT_SANDBOX_GIT_AUTHOR"* ]]
+  [[ "$output" == *"Name <email>"* ]]
+  ! grep -q '^srt --settings ' "$SHIM_LOG"
+}

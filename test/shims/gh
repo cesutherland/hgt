@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
 # hgt test shim — gh. A dedicated shim (not the generic _shim symlink) because hgt's `work` path
-# now issues two *different* gh calls that need independently controllable results: the tracker's
-# `gh issue view` (the issue record) and the forge's `gh api user` (the branch-author login, issue
-# #36). Like git/tmux before it (ADR 0002/D1, 0003), gh graduates so one call's canned output
-# doesn't leak into the other. hgt's contract stays "which gh commands it issues," pinned via
-# $SHIM_LOG; we don't re-test gh.
+# now issues several *different* gh calls that need independently controllable results: the
+# tracker's `gh issue view` (the issue record), the forge's `gh api user` (the branch-author
+# login, issue #36), the token-scope probe (#98), and the commit-identity derivation (#102). Like
+# git/tmux before it (ADR 0002/D1, 0003), gh graduates so one call's canned output doesn't leak
+# into the other. hgt's contract stays "which gh commands it issues," pinned via $SHIM_LOG; we
+# don't re-test gh.
 #
 # Records "gh <args...>" to $SHIM_LOG and honors:
+#   api user --jq '.id,.login'
+#                -> the commit-identity derivation (#102): SHIM_GH_IDENTITY_ID (default: 424242)
+#                   + SHIM_GH_IDENTITY_LOGIN (default: SHIM_GH_USER, else testuser), one per line
+#                   as real jq would emit for that query; exits SHIM_GH_IDENTITY_EXIT (default: 0)
+#                   so a derivation failure can be simulated independent of the login-only call
 #   api user     -> SHIM_GH_USER   (default: testuser), exits SHIM_GH_USER_EXIT (default: 0) so a
 #                                   login-lookup failure can be simulated without failing the
 #                                   unrelated `gh issue view` (which shares SHIM_GH_EXIT)
 #   api -i user  -> the token-scope probe (#98): emits an X-OAuth-Scopes header from
 #                    SHIM_GH_SCOPES (unset/empty -> header omitted, modeling a fine-grained PAT),
 #                    exits SHIM_GH_SCOPES_EXIT (default: 0) so a probe failure (bad token/network)
-#                    can be simulated independent of the other two canned calls
+#                    can be simulated independent of the other canned calls
 #   everything   -> SHIM_GH_OUT
 #   exit code    -> SHIM_GH_EXIT   (default: 0)
 set -euo pipefail
@@ -24,6 +30,13 @@ if [ "${1:-}" = api ] && [ "${2:-}" = -i ] && [ "${3:-}" = user ]; then
   [ -n "${SHIM_GH_SCOPES:-}" ] && printf 'X-OAuth-Scopes: %s\n' "$SHIM_GH_SCOPES"
   printf '\n{"login":"machine-user"}\n'
   exit "${SHIM_GH_SCOPES_EXIT:-0}"
+fi
+
+# Must precede the plain `api user` branch below: that one matches on $1/$2 alone and would
+# otherwise swallow this more specific call too.
+if [ "${1:-}" = api ] && [ "${2:-}" = user ] && [ "${3:-}" = --jq ] && [ "${4:-}" = '.id,.login' ]; then
+  printf '%s\n%s\n' "${SHIM_GH_IDENTITY_ID:-424242}" "${SHIM_GH_IDENTITY_LOGIN:-${SHIM_GH_USER:-testuser}}"
+  exit "${SHIM_GH_IDENTITY_EXIT:-0}"
 fi
 
 if [ "${1:-}" = api ] && [ "${2:-}" = user ]; then

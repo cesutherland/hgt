@@ -163,6 +163,14 @@ hgt work <n>             # local execution: worktree + Claude session for issue 
     unlinked file descriptor, so its value never touches the argv, the command echo, the tmux
     pane, or `/proc/<pid>/cmdline`, and it dies with the process (no persistent on-disk secret).
     **Precondition:** a token usable in the jail wants egress locked down (issue #74).
+  - **Commit authorship (issue #102):** auth != authorship, so the token's identity is also the
+    commit identity — one `GET /user` derives the login + noreply email and stamps
+    `GIT_AUTHOR_NAME/EMAIL` + `GIT_COMMITTER_NAME/EMAIL` as jail env (never a `~/.gitconfig`
+    write), so the operator can approve the resulting PR as a clean third-party reviewer instead
+    of rubber-stamping their own commit. `HGT_SANDBOX_GIT_AUTHOR`/`HGT_SANDBOX_GIT_COMMITTER`
+    (`"Name <email>"`) override verbatim with no API call; a token set but undecodable dies
+    rather than silently falling back to the host identity. No token, no override: nothing is
+    stamped and the host identity stands.
   - **Known friction:** jail writes are deny-by-default (allowed: worktree + git dir). The jail's
     `TMPDIR` is the worktree's own scratch dir (`.hgt/tmp`), so `mktemp` and friends work —
     and each jail's tmp is private to it; a tool that hardcodes `/tmp` will fail.

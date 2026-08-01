@@ -129,6 +129,29 @@ shell does reach the jail without it, and SRT ships no default `unsetEnvVars`.
   exist and sit inside `allowWrite` (SRT's default `/tmp/claude` shows why: never created on
   Linux, and extant-only binding silently skips it, leaving the jail's `/tmp` read-only).
 
+## Amendment — what #102 found
+
+- **Auth != authorship, so #81's token doesn't imply attribution.** The jail inherits the host
+  `~/.gitconfig` (this ADR's own `_SANDBOX_RO_DEPS`), so a tokened, sandboxed commit was still
+  authored as the operator — the forge attributes it to the human, and last-push/self-approval
+  rules force a bypass to approve. `GIT_AUTHOR_NAME/EMAIL` + `GIT_COMMITTER_NAME/EMAIL` stamped
+  as jail env (git reads them directly; no `~/.gitconfig` write) now derive the commit identity
+  **from** the same token the credential seam already carries, so the two can't drift.
+- **The credential seam grew a bundle.** `HGT_SANDBOX_GITHUB_TOKEN` used to be just a token;
+  deriving identity from it means the seam now conceptually carries `{token, author name, author
+  email}`. For the classic-PAT provider (today) that's one `GET /user` — `login` + `id` build the
+  noreply address — gated by a prefix sniff (`ghp_`/`github_pat_`/`gho_`/`ghu_`) since an
+  installation token (`ghs_`, the eventual GitHub App provider, #56/#68) can't answer `GET /user`
+  at all; the mint step for that provider resolves identity itself (`GET /app`, `GET
+  /users/<slug>[bot]`) and hands the bundle down already assembled. `sandbox_argv` never changes
+  either way — it only stamps whatever bundle `_sandbox_derive_identity` resolves.
+  `HGT_SANDBOX_GIT_AUTHOR`/`HGT_SANDBOX_GIT_COMMITTER` (`"Name <email>"`) bypass derivation
+  entirely, verbatim, no API call — the offline/oddball escape hatch.
+- **Fail closed, not fail silent.** A token set but undecodable (bad prefix, API failure,
+  malformed response) dies with remediation rather than leaving the host identity to stand in —
+  a silent fallback is this exact bug again, just intermittent. Only a genuinely credential-less
+  launch (no token, no override) is a no-op.
+
 ## Consequences / residuals
 
 - **Pre-1.0 dependency.** `0.0.67`, "research preview," config format may evolve. Pin an exact
